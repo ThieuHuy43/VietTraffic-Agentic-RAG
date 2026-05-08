@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+langchain
+langchain-core
+langchain-community
+langchain-google-genai
+langgraph
+langgraph-checkpoint-sqlite
+qdrant-client
+sentence-transformers
+pyvi
+beautifulsoup4
+python-docx
+pdfplumber
+pytesseract
+tavily-python
+pytest

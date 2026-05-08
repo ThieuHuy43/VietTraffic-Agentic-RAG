@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant_db
+    ports:
+      - "6333:6333"
+    volumes:
+      - ./data/qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  backend_api:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: viet_traffic_backend
+    ports:
+      - "8000:8000"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+    volumes:
+      - ./data:/data
+      - ./checkpoints:/checkpoints
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    restart: unless-stopped
+
+  streamlit_ui:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: viet_traffic_frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND_URL=http://backend_api:8000
+    depends_on:
+      - backend_api
+    restart: unless-stopped
