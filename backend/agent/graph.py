@@ -42,7 +42,7 @@ def build_graph():
     workflow.add_conditional_edges("router_node", check_intent)
     workflow.add_edge("greeting_node", END)
     
-    workflow.add_edge("retrieve_node", grade_node)
+    workflow.add_edge("retrieve_node", "grade_node")
     workflow.add_conditional_edges("grade_node", check_relevance)
     
     workflow.add_edge("web_search_node", "process_hitl_node")

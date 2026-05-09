@@ -59,40 +59,63 @@ def init_qdrant() -> QdrantClient:
 
 def main():
     # Metadata map giả định để thỏa mãn yêu cầu DOD
+    # Cập nhật Metadata Map thực tế theo các file bạn vừa tải lên
     METADATA_MAP = {
-        "luat_23_2008.html": {
-            "doc_id": "luat_23_2008", "doc_type": "luat", "status": "superseded", 
+        "Luat_23_2008_GiaoThongDuongBo.html": {
+            "doc_id": "Luat_23_2008", "doc_type": "luat", "status": "superseded", 
             "effective_date": "2009-07-01", "amends": None, "supersedes": None
         },
-        "luat_36_2024.docx": {
-            "doc_id": "luat_36_2024", "doc_type": "luat", "status": "active", 
-            "effective_date": "2025-01-01", "amends": None, "supersedes": "luat_23_2008"
+        "Luat_36_2024_TratTuAnToanGiaoThongDuongBo.docx": {
+            "doc_id": "Luat_36_2024", "doc_type": "luat", "status": "active", 
+            "effective_date": "2025-01-01", "amends": None, "supersedes": "Luat_23_2008"
         },
-        "nghi_dinh_123_2021.html": {
-            "doc_id": "nghi_dinh_123_2021", "doc_type": "nghi_dinh", "status": "active", 
-            "effective_date": "2022-01-01", "amends": "nghi_dinh_100_2019", "supersedes": None
+        "Luat_35_2024_DuongBo.html": {
+            "doc_id": "Luat_35_2024", "doc_type": "luat", "status": "active", 
+            "effective_date": "2025-01-01", "amends": None, "supersedes": "Luat_23_2008"
         },
-        "luat_cu_bi_repeal.html": {
-             "doc_id": "luat_cu", "doc_type": "luat", "status": "repealed", 
-             "effective_date": "2000-01-01", "amends": None, "supersedes": None
+        "NGHỊ ĐỊNH 100_2019_NĐ-CP về QUY ĐỊNH XỬ PHẠT VI PHẠM HÀNH CHÍNH TRONG LĨNH VỰC GIAO THÔNG ĐƯỜNG BỘ VÀ ĐƯỜNG SẮT.html": {
+            "doc_id": "NghiDinh_100_2019", "doc_type": "nghi_dinh", "status": "active", 
+            "effective_date": "2020-01-01", "amends": None, "supersedes": None
+        },
+        "NGHỊ ĐỊNH 123_2021_NĐ-CP SỬA ĐỔI, BỔ SUNG MỘT SỐ ĐIỀU CỦA CÁC NGHỊ ĐỊNH QUY ĐỊNH XỬ PHẠT VI PHẠM HÀNH CHÍNH TRONG HÀNG HẢI; GIAO THÔNG Đường bộ, đường sắt mới nhất.html": {
+            "doc_id": "NghiDinh_123_2021", "doc_type": "nghi_dinh", "status": "active", 
+            "effective_date": "2022-01-01", "amends": "NghiDinh_100_2019", "supersedes": None
+        },
+        "Thông tư 12_2017_TT-BGTVT đào tạo sát hạch cấp giấy phép lái xe cơ giới đường bộ.html": {
+            "doc_id": "ThongTu_12_2017", "doc_type": "thong_tu", "status": "active", 
+            "effective_date": "2017-06-01", "amends": None, "supersedes": None
+        },
+        "Thông tư 31_2019_TT-BGTVT quy định về tốc độ và khoảng cách an toàn của xe cơ giới.html": {
+            "doc_id": "ThongTu_31_2019", "doc_type": "thong_tu", "status": "active", 
+            "effective_date": "2019-10-15", "amends": None, "supersedes": None
+        },
+        "quy-chuan-ky-thuat-qcvn-41-2019-bgtvt-bao-hieu-duong-bo.pdf": {
+            "doc_id": "QCVN_41_2019", "doc_type": "quy_chuan", "status": "active", 
+            "effective_date": "2020-07-01", "amends": None, "supersedes": None
         }
     }
 
     raw_dir = os.path.join(os.path.dirname(__file__), "..", "data", "raw_laws")
     all_chunks = []
     
-    # Đọc và Parse văn bản
-    for file_path in glob.glob(os.path.join(raw_dir, "*.*")):
-        filename = os.path.basename(file_path)
-        metadata = METADATA_MAP.get(filename, {
-            "doc_id": filename, "doc_type": "unknown", "status": "active",
-            "effective_date": "unknown", "amends": None, "supersedes": None
-        })
-        
-        parser = get_parser(file_path)
-        chunks = parser.parse(file_path, metadata)
-        all_chunks.extend(chunks)
-        print(f"Đã parse {filename}: {len(chunks)} chunks")
+    # Đọc và Parse văn bản (hỗ trợ quét đệ quy các thư mục con)
+    for root, _, files in os.walk(raw_dir):
+        for filename in files:
+            file_path = os.path.join(root, filename)
+            ext = filename.lower().split('.')[-1]
+            if ext not in ['html', 'docx', 'pdf']:
+                print(f"Bỏ qua file không hỗ trợ: {filename}")
+                continue
+
+            metadata = METADATA_MAP.get(filename, {
+                "doc_id": filename, "doc_type": "unknown", "status": "active",
+                "effective_date": "unknown", "amends": None, "supersedes": None
+            })
+            
+            parser = get_parser(file_path)
+            chunks = parser.parse(file_path, metadata)
+            all_chunks.extend(chunks)
+            print(f"Đã parse {filename}: {len(chunks)} chunks")
 
     if not all_chunks:
         print("Không có chunks nào để ingest.")

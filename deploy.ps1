@@ -15,4 +15,4 @@ Write-Host "Generating mock data and Ingesting to Qdrant..."
 docker compose exec -T backend_api python utils/mock_data_gen.py
 docker compose exec -T backend_api python ingest.py
 
-Write-Host "Deploy completed! Access Frontend at http://localhost:8501"
+Write-Host "Deploy completed! Access Frontend at http://localhost:8000" -ForegroundColor Green

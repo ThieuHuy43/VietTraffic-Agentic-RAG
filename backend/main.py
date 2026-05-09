@@ -3,7 +3,9 @@ import sqlite3
 import json
 import uuid
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
@@ -96,6 +98,20 @@ def pending_endpoint():
             
     return {"pending": pending}
 
+@app.get("/status/{thread_id}")
+def status_endpoint(thread_id: str):
+    """API kiểm tra trạng thái của một thread (đã được duyệt hay chưa)."""
+    config = {"configurable": {"thread_id": thread_id}}
+    try:
+        state = agent_app.get_state(config)
+        if state.next and "process_hitl_node" in state.next:
+            return {"status": "pending"}
+        if state.values and "final_answer" in state.values:
+            return {"status": "done", "answer": state.values["final_answer"]}
+        return {"status": "error", "message": "Chưa có kết quả."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 @app.post("/resume")
 def resume_endpoint(req: ResumeRequest):
     """
@@ -115,17 +131,26 @@ def resume_endpoint(req: ResumeRequest):
     # Cập nhật trạng thái mới cho checkpointer
     agent_app.update_state(config, update_data)
     
-    def event_generator():
-        try:
-            # Truyền None để resume từ điểm bị interrupt
-            for event in agent_app.stream(None, config=config):
-                for node, update in event.items():
-                    if "final_answer" in update:
-                        yield f"data: {json.dumps({'status': 'done', 'answer': update['final_answer'], 'thread_id': req.thread_id}, ensure_ascii=False)}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'status': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
-            
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    # Thực thi phần còn lại của graph đồng bộ (không dùng stream)
+    # Tránh tình trạng Client (Trình duyệt) ngắt kết nối giữa chừng làm sập graph
+    try:
+        agent_app.invoke(None, config=config)
+        return {"status": "success", "message": "Đã xử lý luồng thành công."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# Cung cấp giao diện Frontend Web thay thế Streamlit
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+os.makedirs(static_dir, exist_ok=True)
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+@app.get("/")
+def chat_ui():
+    return FileResponse(os.path.join(static_dir, "index.html"))
+
+@app.get("/admin")
+def admin_ui():
+    return FileResponse(os.path.join(static_dir, "admin.html"))
 
 if __name__ == "__main__":
     import uvicorn

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   qdrant:
     image: qdrant/qdrant:latest
@@ -8,11 +6,6 @@ services:
       - "6333:6333"
     volumes:
       - ./data/qdrant_data:/qdrant/storage
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
     restart: unless-stopped
 
   backend_api:
@@ -31,19 +24,5 @@ services:
       - ./data:/data
       - ./checkpoints:/checkpoints
     depends_on:
-      qdrant:
-        condition: service_healthy
-    restart: unless-stopped
-
-  streamlit_ui:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: viet_traffic_frontend
-    ports:
-      - "8501:8501"
-    environment:
-      - BACKEND_URL=http://backend_api:8000
-    depends_on:
-      - backend_api
+      - qdrant
     restart: unless-stopped
