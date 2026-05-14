@@ -19,4 +19,4 @@ echo "📚 Sinh dữ liệu Mock và nạp (Ingest) vào Qdrant..."
 docker compose exec -T backend_api python utils/mock_data_gen.py
 docker compose exec -T backend_api python ingest.py
 
-echo "✅ Deploy hoàn tất! Truy cập Frontend tại http://localhost:8501"
+echo "✅ Deploy hoàn tất! Truy cập giao diện tại http://localhost:8000"

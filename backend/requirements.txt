@@ -15,3 +15,5 @@ pdfplumber
 pytesseract
 tavily-python
 pytest
+langchain-groq
+langchain-openai

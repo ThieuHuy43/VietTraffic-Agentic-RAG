@@ -139,7 +139,7 @@ def resume_endpoint(req: ResumeRequest):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-# Cung cấp giao diện Frontend Web thay thế Streamlit
+# Cung cấp giao diện Web tĩnh từ FastAPI
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(static_dir, exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")

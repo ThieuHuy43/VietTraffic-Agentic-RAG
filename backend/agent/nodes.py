@@ -8,7 +8,24 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from retriever.qdrant_retriever import QdrantHybridRetriever
 
 # Khởi tạo mô hình
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+if os.getenv("DEEPSEEK_API_KEY"):
+    from langchain_openai import ChatOpenAI
+    llm = ChatOpenAI(
+        model="deepseek-v4-flash", 
+        api_key=os.getenv("DEEPSEEK_API_KEY"), 
+        base_url="https://api.deepseek.com/v1",
+        temperature=0
+    )
+    print("Using LLM: DeepSeek (deepseek-chat)", flush=True)
+elif os.getenv("GROQ_API_KEY"):
+    from langchain_groq import ChatGroq
+    llm = ChatGroq(model="llama3-70b-8192", temperature=0)
+    print("Using LLM: Groq (llama3-70b-8192)", flush=True)
+elif os.getenv("GEMINI_API_KEY"):
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+    print("Using LLM: Google Gemini", flush=True)
+else:
+    raise ValueError("Vui lòng cung cấp ít nhất một API Key: DEEPSEEK_API_KEY, GROQ_API_KEY hoặc GEMINI_API_KEY")
 
 def router_node(state):
     """Phân loại intent của câu hỏi."""
@@ -26,7 +43,7 @@ def greeting_node(state):
 
 def retrieve_node(state):
     """Truy xuất tài liệu từ Qdrant (Hybrid + RRF)."""
-    retriever = QdrantHybridRetriever(top_k=5)
+    retriever = QdrantHybridRetriever(top_k=2)
     chunks = retriever.retrieve(state.get("question", ""))
     return {"chunks": chunks}
 
@@ -126,5 +143,24 @@ Yêu cầu bắt buộc: Trích dẫn rõ ràng [Tên văn bản, Điều X, Kho
 
 Câu hỏi: {state.get('question')}
 """
+    # -- ĐOẠN CODE CHÈN THÊM ĐỂ DEBUG --
+    # Đếm ước lượng số ký tự và số từ
+    char_count = len(prompt)
+    word_count = len(prompt.split())
+    # Khoảng 1 token ~ 0.75 từ (Rule of thumb)
+    est_tokens = int(word_count / 0.75) 
+    
+    print("\n" + "="*50, flush=True)
+    print("🚀 [DEBUG RAG] - NỘI DUNG PROMPT SẮP GỬI VÀO LLM:", flush=True)
+    print("="*50, flush=True)
+    print(f"Ước lượng Tokens : ~{est_tokens} tokens", flush=True)
+    print(f"Số từ (Words)    : {word_count} words", flush=True)
+    print(f"Số ký tự (Chars) : {char_count} chars", flush=True)
+    print("-" * 50, flush=True)
+    # Bỏ comment dòng dưới nếu muốn in toàn bộ cục văn bản luật ra xem:
+    print(prompt, flush=True) 
+    print("="*50 + "\n", flush=True)
+    # -----------------------------------
+
     res = llm.invoke(prompt)
     return {"final_answer": res.content}

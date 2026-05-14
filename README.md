@@ -4,15 +4,15 @@ Hệ thống **VietTraffic-Agentic-RAG** là một ứng dụng Hỏi-Đáp (Q&A
 
 ## 🌟 Tính năng nổi bật
 
-- **Giao diện trực quan**: Ứng dụng web được xây dựng bằng [Streamlit](https://streamlit.io/) thân thiện và dễ sử dụng.
+- **Giao diện trực quan**: Ứng dụng web tĩnh được phục vụ trực tiếp từ FastAPI, gồm màn hình chat và dashboard Admin HITL.
 - **Truy xuất thông tin mạnh mẽ**: Tích hợp **Qdrant** làm Vector Database để lưu trữ và tìm kiếm các điều luật giao thông ngữ nghĩa.
 - **Tích hợp Agentic LLM**: Sử dụng sức mạnh của **Google Gemini** làm ngôn ngữ mô hình lõi và **Tavily** để Agent có thể tra cứu thêm thông tin thực tế từ Internet khi cần.
-- **Kiến trúc Microservices**: Tách biệt hoàn toàn Frontend và Backend (API), dễ dàng scale và bảo trì.
+- **Kiến trúc gọn nhẹ**: FastAPI phục vụ cả API, giao diện chat và dashboard Admin; Qdrant chạy riêng làm vector database.
 - **Triển khai cực nhanh**: Hỗ trợ Docker & Docker Compose để chạy ứng dụng ở bất kỳ đâu chỉ bằng một dòng lệnh.
 
 ## 🛠️ Công nghệ sử dụng
 
-- **Frontend:** Streamlit, Python
+- **Frontend:** HTML / CSS / JavaScript tĩnh trong FastAPI
 - **Backend API:** FastAPI / LangChain / LlamaIndex (Python)
 - **Vector Database:** Qdrant
 - **LLM & Tools:** Google Gemini API, Tavily Search API
@@ -66,7 +66,8 @@ docker-compose up -d --build
 ### 4. Truy cập ứng dụng
 
 Sau khi các container khởi động thành công (bạn có thể dùng `docker-compose ps` để kiểm tra):
-- **Web UI (Streamlit):** Truy cập [http://localhost:8501](http://localhost:8501) để chat với hệ thống.
+- **Web UI:** Truy cập [http://localhost:8000](http://localhost:8000) để chat với hệ thống.
+- **Admin HITL:** Truy cập [http://localhost:8000/admin](http://localhost:8000/admin) để duyệt, sửa hoặc từ chối câu trả lời cần kiểm duyệt.
 - **Backend API Docs (Swagger):** Truy cập [http://localhost:8000/docs](http://localhost:8000/docs).
 - **Qdrant DB API:** Đang chạy tại cổng `6333` (Dashboard tại http://localhost:6333/dashboard).
 
@@ -76,7 +77,6 @@ Sau khi các container khởi động thành công (bạn có thể dùng `docke
 VietTraffic-Agentic-RAG/
 │
 ├── backend/            # Chứa mã nguồn cho FastAPI Backend và hệ thống Agent/RAG
-├── frontend/           # Chứa mã nguồn cho Streamlit UI
 ├── data/               # Nơi lưu trữ tài liệu dữ liệu thô và Qdrant storage
 ├── checkpoints/        # Lưu trữ checkpoint/state của Agent
 ├── docker-compose.yml  # File cấu hình để dựng toàn bộ các dịch vụ
