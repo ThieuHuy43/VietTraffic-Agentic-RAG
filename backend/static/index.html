@@ -4,53 +4,295 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trợ lý PL Giao thông</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Marked.js for Markdown parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
-        :root { --bg: #0f172a; --panel: #1e293b; --text: #f8fafc; --accent: #3b82f6; --user-msg: #3b82f6; --bot-msg: #334155; }
-        body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); margin: 0; height: 100vh; display: flex; flex-direction: column; }
-        .header { padding: 20px; text-align: center; background: rgba(30, 41, 59, 0.8); backdrop-filter: blur(10px); border-bottom: 1px solid #334; }
-        .chat-container { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; max-width: 800px; margin: 0 auto; width: 100%; box-sizing: border-box; }
-        .message { padding: 12px 18px; border-radius: 12px; max-width: 85%; line-height: 1.6; }
-        .message.user { background: var(--user-msg); align-self: flex-end; border-bottom-right-radius: 2px; }
-        .message.bot { background: var(--bot-msg); align-self: flex-start; border-bottom-left-radius: 2px; white-space: pre-wrap; }
-        .input-area { padding: 20px; background: var(--panel); display: flex; gap: 10px; max-width: 800px; margin: 0 auto; width: 100%; box-sizing: border-box; border-top-left-radius: 12px; border-top-right-radius: 12px; }
-        input { flex: 1; padding: 15px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: white; outline: none; font-size: 16px; }
-        button { padding: 15px 25px; background: var(--accent); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; transition: 0.2s; font-size: 16px; }
-        button:hover { background: #2563eb; }
-        .pending { color: #fbbf24; font-style: italic; }
-        em { color: #93c5fd; font-style: normal; font-weight: 600; }
+        :root { 
+            --bg-dark: #090e17; 
+            --glass-bg: rgba(15, 23, 42, 0.6);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --gradient-primary: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            --bot-bubble: rgba(30, 41, 59, 0.7);
+        }
+
+        body { 
+            font-family: 'Outfit', sans-serif; 
+            background: var(--bg-dark);
+            background-image: 
+                radial-gradient(circle at 15% 50%, rgba(59, 130, 246, 0.15), transparent 25%),
+                radial-gradient(circle at 85% 30%, rgba(139, 92, 246, 0.15), transparent 25%);
+            color: var(--text-main); 
+            margin: 0; 
+            height: 100vh; 
+            display: flex; 
+            flex-direction: column; 
+            overflow: hidden;
+        }
+
+        /* Khung Header Kính mờ */
+        .header { 
+            padding: 15px 25px; 
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--glass-bg); 
+            backdrop-filter: blur(12px); 
+            -webkit-backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--glass-border); 
+            z-index: 10;
+        }
+
+        .header-title {
+            margin: 0;
+            font-weight: 600;
+            font-size: 1.2rem;
+            background: var(--gradient-primary);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .admin-link {
+            color: var(--text-muted); 
+            font-size: 0.9rem; 
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            transition: color 0.3s ease;
+        }
+
+        .admin-link:hover { color: #fff; }
+
+        /* Vùng nội dung Chat */
+        .chat-container { 
+            flex: 1; 
+            overflow-y: auto; 
+            padding: 30px 20px; 
+            display: flex; 
+            flex-direction: column; 
+            gap: 24px; 
+            max-width: 850px; 
+            margin: 0 auto; 
+            width: 100%; 
+            box-sizing: border-box; 
+            scroll-behavior: smooth;
+        }
+
+        /* Thanh Scrollbar hiện đại */
+        .chat-container::-webkit-scrollbar { width: 6px; }
+        .chat-container::-webkit-scrollbar-track { background: transparent; }
+        .chat-container::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+
+        /* Bóng thoại */
+        .message { 
+            padding: 14px 20px; 
+            border-radius: 18px; 
+            max-width: 85%; 
+            line-height: 1.6; 
+            font-size: 0.95rem;
+            animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            opacity: 0;
+            transform: translateY(10px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+
+        @keyframes slideUp {
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user { 
+            background: var(--gradient-primary); 
+            align-self: flex-end; 
+            border-bottom-right-radius: 4px; 
+        }
+
+        .message.bot { 
+            background: var(--bot-bubble); 
+            align-self: flex-start; 
+            border-bottom-left-radius: 4px; 
+            border: 1px solid var(--glass-border);
+            backdrop-filter: blur(10px);
+        }
+
+        /* Định dạng nội dung Markdown trong tin nhắn Bot */
+        .message.bot p { margin: 0 0 10px 0; }
+        .message.bot p:last-child { margin: 0; }
+        .message.bot ul, .message.bot ol { margin: 8px 0; padding-left: 20px; }
+        .message.bot strong { color: #fff; font-weight: 600; }
+        
+        /* Hiệu ứng nổi bật đoạn trích dẫn luật */
+        .citation {
+            color: #a78bfa;
+            font-weight: 600;
+            background: rgba(167, 139, 250, 0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        /* Khung nhập liệu nổi (Floating Input) */
+        .input-wrapper {
+            padding: 20px;
+            max-width: 850px;
+            margin: 0 auto;
+            width: 100%;
+            box-sizing: border-box;
+            position: relative;
+        }
+
+        .input-box {
+            display: flex; 
+            gap: 12px; 
+            background: var(--glass-bg); 
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            padding: 10px 10px 10px 20px;
+            border-radius: 24px;
+            border: 1px solid var(--glass-border);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            transition: border-color 0.3s;
+        }
+
+        .input-box:focus-within {
+            border-color: rgba(139, 92, 246, 0.5);
+        }
+
+        input { 
+            flex: 1; 
+            border: none; 
+            background: transparent; 
+            color: white; 
+            outline: none; 
+            font-size: 1rem; 
+            font-family: inherit;
+        }
+
+        input::placeholder { color: var(--text-muted); }
+
+        button { 
+            background: var(--gradient-primary); 
+            color: white; 
+            border: none; 
+            border-radius: 50%; 
+            width: 44px;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer; 
+            transition: transform 0.2s, box-shadow 0.2s; 
+        }
+
+        button:hover { 
+            transform: scale(1.05);
+            box-shadow: 0 0 15px rgba(139, 92, 246, 0.4);
+        }
+
+        button svg {
+            width: 20px;
+            height: 20px;
+            fill: currentColor;
+            margin-left: 2px;
+        }
+
+        /* Typing indicator */
+        .typing {
+            display: flex;
+            gap: 4px;
+            padding: 5px;
+            align-items: center;
+        }
+        .dot {
+            width: 6px;
+            height: 6px;
+            background: #94a3b8;
+            border-radius: 50%;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+        .dot:nth-child(1) { animation-delay: -0.32s; }
+        .dot:nth-child(2) { animation-delay: -0.16s; }
+        
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+
+        .hitl-notice {
+            color: #fbbf24;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
     </style>
 </head>
 <body>
     <div class="header">
-        <h2 style="margin:0 0 5px 0;">🚦 Trợ lý Pháp luật Giao thông VN</h2>
-        <a href="/admin" target="_blank" style="color: #94a3b8; font-size: 14px; text-decoration: none;">⚙️ Mở Admin Dashboard</a>
+        <h2 class="header-title">🚦 VietTraffic Agent</h2>
+        <a href="/admin" target="_blank" class="admin-link">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            Admin
+        </a>
     </div>
+
     <div class="chat-container" id="chat">
-        <div class="message bot">Xin chào! Tôi có thể giúp gì cho bạn về Luật Giao thông Việt Nam?</div>
+        <div class="message bot">
+            <p>Xin chào! Tôi là Trợ lý Pháp luật Giao thông Đường bộ Việt Nam.</p>
+            <p>Tôi có thể giúp bạn giải đáp thắc mắc về <strong>Luật</strong>, <strong>Nghị định xử phạt</strong> và các <strong>Quy chuẩn biển báo</strong> mới nhất.</p>
+        </div>
     </div>
-    <div class="input-area">
-        <input type="text" id="prompt" placeholder="Hỏi tôi về luật giao thông..." onkeypress="if(event.key === 'Enter') send()">
-        <button onclick="send()">Gửi</button>
+
+    <div class="input-wrapper">
+        <div class="input-box">
+            <input type="text" id="prompt" placeholder="Nhập câu hỏi của bạn (VD: Vượt đèn đỏ phạt bao nhiêu?)" onkeypress="if(event.key === 'Enter') send()" autocomplete="off">
+            <button onclick="send()" aria-label="Gửi">
+                <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path></svg>
+            </button>
+        </div>
     </div>
 
     <script>
+        // Cấu hình Marked.js để mở liên kết sang tab mới
+        const renderer = new marked.Renderer();
+        renderer.link = function(href, title, text) {
+            return `<a target="_blank" rel="noopener" href="${href}" title="${title || ''}">${text}</a>`;
+        };
+        marked.setOptions({ renderer: renderer, breaks: true });
+
         const threadId = crypto.randomUUID ? crypto.randomUUID() : 'thread-' + Math.random().toString(36).substr(2, 9);
         const chat = document.getElementById('chat');
         let pollingInterval = null;
 
-        function addMessage(role, text, id='') {
+        function addMessage(role, htmlContent, id='') {
             const div = document.createElement('div');
             div.className = `message ${role}`;
             if(id) div.id = id;
-            div.innerHTML = text;
+            div.innerHTML = htmlContent;
             chat.appendChild(div);
-            chat.scrollTop = chat.scrollHeight;
+            scrollToBottom();
             return div;
         }
 
-        function formatCitation(text) {
-            return text.replace(/\[(.*?)\](?!\()/g, '<em>[$1]</em>');
+        function scrollToBottom() {
+            chat.scrollTo({ top: chat.scrollHeight, behavior: 'smooth' });
+        }
+
+        function showTyping(id) {
+            return addMessage('bot', `<div class="typing"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>`, id);
+        }
+
+        // Parse citation [Luat ABC, Dieu X] -> style citation
+        function formatMarkdown(text) {
+            let parsed = marked.parse(text);
+            // Enhance citations inside brackets
+            parsed = parsed.replace(/\[([^\]]+)\]/g, '<span class="citation">[$1]</span>');
+            return parsed;
         }
 
         async function send() {
@@ -61,7 +303,7 @@
             
             addMessage('user', q);
             const botMsgId = 'bot-' + Date.now();
-            const botDiv = addMessage('bot', '...', botMsgId);
+            const botDiv = showTyping(botMsgId);
 
             try {
                 const response = await fetch('/chat', {
@@ -83,19 +325,25 @@
                             try {
                                 const data = JSON.parse(line.replace('data: ', ''));
                                 if(data.status === 'done') {
-                                    botDiv.innerHTML = formatCitation(data.answer);
+                                    botDiv.innerHTML = formatMarkdown(data.answer);
+                                    scrollToBottom();
                                 } else if(data.status === 'pending') {
-                                    botDiv.innerHTML = `<span class="pending">⏳ ${data.message}</span>`;
+                                    botDiv.innerHTML = `
+                                        <div class="hitl-notice">
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                                            Hệ thống phát hiện thiếu dữ liệu nội bộ. Đã thu thập từ Web và đang chờ Admin duyệt...
+                                        </div>`;
                                     startPolling(botDiv);
+                                    scrollToBottom();
                                 } else if(data.status === 'error') {
-                                    botDiv.innerHTML = `❌ Lỗi: ${data.message}`;
+                                    botDiv.innerHTML = `<span style="color:#ef4444">❌ Lỗi: ${data.message}</span>`;
                                 }
                             } catch(e) {}
                         }
                     }
                 }
             } catch (e) {
-                botDiv.innerHTML = `Lỗi kết nối: ${e}`;
+                botDiv.innerHTML = `<span style="color:#ef4444">Lỗi kết nối: ${e}</span>`;
             }
         }
 
@@ -106,7 +354,13 @@
                     const res = await fetch(`/status/${threadId}`);
                     const data = await res.json();
                     if(data.status === 'done') {
-                        botDiv.innerHTML = formatCitation(data.answer);
+                        // Thêm hiệu ứng fade in khi thay thế nội dung
+                        botDiv.style.opacity = '0';
+                        setTimeout(() => {
+                            botDiv.innerHTML = formatMarkdown(data.answer);
+                            botDiv.style.opacity = '1';
+                            scrollToBottom();
+                        }, 200);
                         clearInterval(pollingInterval);
                     }
                 } catch(e) {}
