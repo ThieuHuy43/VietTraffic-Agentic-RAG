@@ -13,7 +13,6 @@ logs:
 	docker compose logs -f
 
 ingest:
-	docker compose exec backend_api python utils/mock_data_gen.py
 	docker compose exec backend_api python ingest.py
 
 clean:

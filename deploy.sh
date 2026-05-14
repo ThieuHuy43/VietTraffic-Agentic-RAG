@@ -15,8 +15,11 @@ docker compose up -d --build
 echo "⏳ Đợi Qdrant và Backend khởi động (10s)..."
 sleep 10
 
-echo "📚 Sinh dữ liệu Mock và nạp (Ingest) vào Qdrant..."
-docker compose exec -T backend_api python utils/mock_data_gen.py
-docker compose exec -T backend_api python ingest.py
+echo "📚 Nạp dữ liệu luật vào Qdrant..."
+if [ -n "${FORCE_REINGEST:-}" ]; then
+    docker compose exec -T -e FORCE_REINGEST="$FORCE_REINGEST" backend_api python ingest.py
+else
+    docker compose exec -T backend_api python ingest.py
+fi
 
 echo "✅ Deploy hoàn tất! Truy cập giao diện tại http://localhost:8000"

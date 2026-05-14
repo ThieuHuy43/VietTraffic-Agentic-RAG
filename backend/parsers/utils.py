@@ -1,6 +1,9 @@
 import re
 from typing import Optional, Dict, Any, List
 
+MAX_CHUNK_CHARS = 3500
+CHUNK_OVERLAP_CHARS = 300
+
 def roman_to_int(s: str) -> int:
     """Chuyển đổi số La Mã sang số nguyên."""
     rom_val = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
@@ -35,6 +38,50 @@ class LegalStateTracker:
         
         self.chunks: List[Dict[str, Any]] = []
         self.current_text: List[str] = []
+
+    def _split_long_text(self, text: str) -> List[str]:
+        if len(text) <= MAX_CHUNK_CHARS:
+            return [text]
+
+        parts = []
+        start = 0
+        while start < len(text):
+            end = min(start + MAX_CHUNK_CHARS, len(text))
+            if end < len(text):
+                split_at = max(
+                    text.rfind(". ", start, end),
+                    text.rfind("; ", start, end),
+                    text.rfind("\n", start, end),
+                    text.rfind(" ", start, end),
+                )
+                if split_at > start + int(MAX_CHUNK_CHARS * 0.6):
+                    end = split_at + 1
+
+            part = text[start:end].strip()
+            if part:
+                parts.append(part)
+
+            if end >= len(text):
+                break
+            start = max(end - CHUNK_OVERLAP_CHARS, 0)
+
+        return parts
+
+    def _append_chunk(self, text: str, part_index: int, total_parts: int):
+        self.chunks.append({
+            "doc_id": self.doc_id,
+            "doc_type": self.doc_type,
+            "chuong": self.current_chuong,
+            "dieu": self.current_dieu,
+            "khoan": self.current_khoan,
+            "text": text,
+            "status": self.status,
+            "effective_date": self.effective_date,
+            "amends": self.amends,
+            "supersedes": self.supersedes,
+            "chunk_part": part_index,
+            "chunk_total_parts": total_parts,
+        })
         
     def flush(self):
         """Gộp text hiện hành và tạo chunk, sau đó clear text."""
@@ -42,18 +89,10 @@ class LegalStateTracker:
             text = " ".join(self.current_text).strip()
             # Bỏ qua các chunk quá ngắn hoặc chỉ chứa whitespace
             if text and len(text) > 5:
-                self.chunks.append({
-                    "doc_id": self.doc_id,
-                    "doc_type": self.doc_type,
-                    "chuong": self.current_chuong,
-                    "dieu": self.current_dieu,
-                    "khoan": self.current_khoan,
-                    "text": text,
-                    "status": self.status,
-                    "effective_date": self.effective_date,
-                    "amends": self.amends,
-                    "supersedes": self.supersedes,
-                })
+                parts = self._split_long_text(text)
+                total_parts = len(parts)
+                for index, part in enumerate(parts, start=1):
+                    self._append_chunk(part, index, total_parts)
             self.current_text = []
             
     def process_line(self, line: str):

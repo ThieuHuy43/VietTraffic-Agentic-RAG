@@ -36,7 +36,7 @@ venv.bak/
 # SQLite checkpoints
 checkpoints/*.sqlite
 checkpoints/*.db
-
+checkpoints
 # Qdrant Data (if tested locally)
 data/qdrant_data/
 

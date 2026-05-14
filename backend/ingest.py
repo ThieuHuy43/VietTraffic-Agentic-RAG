@@ -1,5 +1,4 @@
 import os
-import glob
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient, models
@@ -17,9 +16,17 @@ QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
 COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "viet_traffic_laws")
 
-# Khởi tạo mô hình Dense
-print("Loading e5-small-v2 model...")
-dense_model = SentenceTransformer('intfloat/e5-small-v2')
+_dense_model = None
+
+def get_dense_model():
+    global _dense_model
+    if _dense_model is None:
+        print("Loading e5-small-v2 model...")
+        _dense_model = SentenceTransformer('intfloat/e5-small-v2')
+    return _dense_model
+
+def force_reingest() -> bool:
+    return os.getenv("FORCE_REINGEST", "").lower() in {"1", "true", "yes", "y"}
 
 def get_parser(file_path: str):
     ext = file_path.lower().split('.')[-1]
@@ -32,14 +39,32 @@ def get_parser(file_path: str):
     else:
         raise ValueError(f"Không hỗ trợ định dạng: {ext}")
 
-
-
-def init_qdrant() -> QdrantClient:
-    client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
-    
-    # Kiểm tra và tạo collection cho Hybrid Search
+def collection_exists(client: QdrantClient) -> bool:
     collections = [c.name for c in client.get_collections().collections]
-    if COLLECTION_NAME not in collections:
+    return COLLECTION_NAME in collections
+
+def should_skip_ingest(client: QdrantClient) -> bool:
+    if force_reingest() or not collection_exists(client):
+        return False
+
+    point_count = client.count(collection_name=COLLECTION_NAME, exact=True).count
+    if point_count > 0:
+        print(
+            f"Collection {COLLECTION_NAME} đã có {point_count} points. "
+            "Bỏ qua ingest. Đặt FORCE_REINGEST=1 nếu muốn nạp lại."
+        )
+        return True
+
+    return False
+
+def init_qdrant(client: QdrantClient, recreate: bool = False) -> QdrantClient:
+    if recreate and collection_exists(client):
+        print(f"Xóa collection {COLLECTION_NAME} để ingest lại từ đầu...")
+        client.delete_collection(collection_name=COLLECTION_NAME)
+
+    # Kiểm tra và tạo collection cho Hybrid Search
+    if not collection_exists(client):
+        dense_model = get_dense_model()
         print(f"Tạo collection {COLLECTION_NAME}...")
         client.create_collection(
             collection_name=COLLECTION_NAME,
@@ -58,6 +83,10 @@ def init_qdrant() -> QdrantClient:
     return client
 
 def main():
+    client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+    if should_skip_ingest(client):
+        return
+
     # Metadata map giả định để thỏa mãn yêu cầu DOD
     # Cập nhật Metadata Map thực tế theo các file bạn vừa tải lên
     METADATA_MAP = {
@@ -122,7 +151,8 @@ def main():
         return
 
     # Ingest vào Qdrant
-    client = init_qdrant()
+    client = init_qdrant(client, recreate=force_reingest())
+    dense_model = get_dense_model()
     points = []
     
     for i, chunk in enumerate(all_chunks):

@@ -7,21 +7,68 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from retriever.qdrant_retriever import QdrantHybridRetriever
 
+LLM_PROVIDER = "unknown"
+MAX_GRADE_CONTEXT_CHARS = 8000
+MAX_GENERATE_CONTEXT_CHARS = 14000
+MAX_WEB_CONTEXT_CHARS = 6000
+MAX_CHUNK_CHARS = 3500
+
+def estimate_tokens(text: str) -> int:
+    """Ước lượng nhanh số token để debug kích thước prompt trước khi gọi API."""
+    return max(1, int(len(text) / 4))
+
+def debug_llm_prompt(node_name: str, prompt: str):
+    print("\n" + "=" * 50, flush=True)
+    print(f"[DEBUG LLM] Node: {node_name}", flush=True)
+    print(f"[DEBUG LLM] Provider: {LLM_PROVIDER}", flush=True)
+    print(f"[DEBUG LLM] Estimated prompt tokens: ~{estimate_tokens(prompt)}", flush=True)
+    print(f"[DEBUG LLM] Words: {len(prompt.split())}", flush=True)
+    print(f"[DEBUG LLM] Chars: {len(prompt)}", flush=True)
+    print("=" * 50 + "\n", flush=True)
+
+def truncate_text(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars].rsplit(" ", 1)[0].strip()
+    return f"{truncated}\n...[đã rút gọn]"
+
+def build_limited_context(items, formatter, max_chars: int) -> str:
+    parts = []
+    total = 0
+    for item in items:
+        part = formatter(item)
+        remaining = max_chars - total
+        if remaining <= 0:
+            break
+        if len(part) > remaining:
+            part = truncate_text(part, remaining)
+        parts.append(part)
+        total += len(part) + 1
+    return "\n".join(parts)
+
 # Khởi tạo mô hình
 if os.getenv("DEEPSEEK_API_KEY"):
+    LLM_PROVIDER = "deepseek"
     from langchain_openai import ChatOpenAI
     llm = ChatOpenAI(
         model="deepseek-v4-flash", 
         api_key=os.getenv("DEEPSEEK_API_KEY"), 
-        base_url="https://api.deepseek.com/v1",
+        base_url="https://api.deepseek.com",
         temperature=0
     )
-    print("Using LLM: DeepSeek (deepseek-chat)", flush=True)
+    print("Using LLM: DeepSeek (deepseek-v4-flash)", flush=True)
 elif os.getenv("GROQ_API_KEY"):
+    LLM_PROVIDER = "groq"
     from langchain_groq import ChatGroq
-    llm = ChatGroq(model="llama3-70b-8192", temperature=0)
-    print("Using LLM: Groq (llama3-70b-8192)", flush=True)
+    llm = ChatGroq(
+        model="llama-3.3-70b-versatile",
+        groq_api_key=os.getenv("GROQ_API_KEY"),
+        max_tokens=2048,
+        temperature=0
+    )
+    print("Using LLM: Groq (llama-3.3-70b-versatile)", flush=True)
 elif os.getenv("GEMINI_API_KEY"):
+    LLM_PROVIDER = "gemini"
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
     print("Using LLM: Google Gemini", flush=True)
 else:
@@ -32,6 +79,7 @@ def router_node(state):
     prompt = f"""Phân loại câu hỏi của người dùng vào 1 trong 2 loại: 'hoi_luat', 'chao_hoi'.
 Câu hỏi: {state.get('question')}
 Trả lời chỉ 1 từ duy nhất:"""
+    debug_llm_prompt("router_node", prompt)
     res = llm.invoke(prompt)
     intent = res.content.strip().lower()
     if 'chao_hoi' in intent:
@@ -53,11 +101,16 @@ def grade_node(state):
     if not chunks:
          return {"is_relevant": False}
          
-    context = "\\n".join([c["text"] for c in chunks])
+    context = build_limited_context(
+        chunks,
+        lambda c: truncate_text(c["text"], MAX_CHUNK_CHARS),
+        MAX_GRADE_CONTEXT_CHARS
+    )
     prompt = f"""Đánh giá xem tài liệu sau có liên quan và đủ để trả lời câu hỏi không.
 Câu hỏi: {state.get('question')}
 Tài liệu: {context}
 Trả lời (yes/no):"""
+    debug_llm_prompt("grade_node", prompt)
     res = llm.invoke(prompt)
     if "yes" in res.content.lower():
          return {"is_relevant": True}
@@ -68,11 +121,16 @@ def web_search_node(state):
     try:
         search = TavilySearchResults(max_results=3)
         results = search.invoke(state.get("question", ""))
-        context = "\\n".join([r["content"] for r in results])
+        context = build_limited_context(
+            results,
+            lambda r: truncate_text(r.get("content", ""), 2000),
+            MAX_WEB_CONTEXT_CHARS
+        )
         
         # Nháp câu trả lời dựa trên web search để chờ duyệt
         prompt = f"""Dựa vào thông tin web: {context}
 Trả lời câu hỏi: {state.get('question')}"""
+        debug_llm_prompt("web_search_node", prompt)
         res = llm.invoke(prompt)
         return {"draft_answer": res.content}
     except Exception as e:
@@ -121,16 +179,20 @@ def generate_node(state):
             valid_chunks.extend(docs)
             
     # Tạo context chuẩn
-    context_list = []
-    for c in valid_chunks:
+    def format_chunk(c):
         chuong = f"Chương {c['chuong']}" if c.get('chuong') else ""
         dieu = f"Điều {c['dieu']}" if c.get('dieu') else ""
         khoan = f"Khoản {c['khoan']}" if c.get('khoan') else ""
         prefix = f"[{c['doc_id']} {chuong} {dieu} {khoan}]".strip()
-        context_list.append(f"{prefix}: {c['text']}")
+        text = truncate_text(c["text"], MAX_CHUNK_CHARS)
+        return f"{prefix}: {text}"
         
-    context_str = "\\n".join(context_list)
-    notes_str = "\\n".join(conflict_notes)
+    context_str = build_limited_context(
+        valid_chunks,
+        format_chunk,
+        MAX_GENERATE_CONTEXT_CHARS
+    )
+    notes_str = "\n".join(conflict_notes)
     
     prompt = f"""Bạn là Trợ lý Pháp luật Giao thông VN.
 Trả lời câu hỏi của người dùng dựa trên tài liệu pháp luật sau đây.
@@ -143,24 +205,7 @@ Yêu cầu bắt buộc: Trích dẫn rõ ràng [Tên văn bản, Điều X, Kho
 
 Câu hỏi: {state.get('question')}
 """
-    # -- ĐOẠN CODE CHÈN THÊM ĐỂ DEBUG --
-    # Đếm ước lượng số ký tự và số từ
-    char_count = len(prompt)
-    word_count = len(prompt.split())
-    # Khoảng 1 token ~ 0.75 từ (Rule of thumb)
-    est_tokens = int(word_count / 0.75) 
-    
-    print("\n" + "="*50, flush=True)
-    print("🚀 [DEBUG RAG] - NỘI DUNG PROMPT SẮP GỬI VÀO LLM:", flush=True)
-    print("="*50, flush=True)
-    print(f"Ước lượng Tokens : ~{est_tokens} tokens", flush=True)
-    print(f"Số từ (Words)    : {word_count} words", flush=True)
-    print(f"Số ký tự (Chars) : {char_count} chars", flush=True)
-    print("-" * 50, flush=True)
-    # Bỏ comment dòng dưới nếu muốn in toàn bộ cục văn bản luật ra xem:
-    print(prompt, flush=True) 
-    print("="*50 + "\n", flush=True)
-    # -----------------------------------
+    debug_llm_prompt("generate_node", prompt)
 
     res = llm.invoke(prompt)
     return {"final_answer": res.content}

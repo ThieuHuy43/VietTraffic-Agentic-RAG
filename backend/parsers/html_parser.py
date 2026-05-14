@@ -15,8 +15,14 @@ class HtmlParser(BaseParser):
             
         tracker = LegalStateTracker(metadata)
         
-        # Duyệt qua các block chứa chữ
-        for element in soup.find_all(["p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li"]):
+        block_tags = ["p", "h1", "h2", "h3", "h4", "h5", "h6", "li"]
+        container_children = block_tags + ["div", "table", "section", "article"]
+
+        # Duyệt qua các block chứa chữ. Chỉ lấy div dạng leaf để tránh duplicate
+        # text từ div cha chứa nhiều p/li/heading con.
+        for element in soup.find_all(block_tags + ["div"]):
+            if element.name == "div" and element.find(container_children):
+                continue
             # Dùng separator khoảng trắng để tránh dính chữ
             text = element.get_text(separator=" ", strip=True)
             if text:
