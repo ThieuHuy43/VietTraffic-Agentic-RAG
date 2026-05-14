@@ -133,22 +133,49 @@ Trả lời (yes/no):"""
 def web_search_node(state):
     """Sử dụng Tavily để tìm kiếm ngoài khi tài liệu Qdrant không đủ."""
     try:
-        search = TavilySearchResults(max_results=3)
-        results = search.invoke(state.get("question", ""))
+        from langchain_community.utilities.tavily_search import TavilySearchAPIWrapper
+        
+        # Giới hạn các nguồn uy tín
+        legal_domains = [
+            "thuvienphapluat.vn", 
+            "luatvietnam.vn", 
+            "chinhphu.vn", 
+            "bocongan.gov.vn", 
+            "csgt.vn", 
+            "mt.gov.vn",
+            "xaydungchinhsach.chinhphu.vn"
+        ]
+        
+        api_wrapper = TavilySearchAPIWrapper()
+        raw_response = api_wrapper.raw_results(
+            state.get("question", ""),
+            max_results=3,
+            include_domains=legal_domains
+        )
+        
+        results = raw_response if isinstance(raw_response, list) else raw_response.get("results", [])
+        
+        def format_web_result(r):
+            title = r.get("title", "Không rõ tiêu đề")
+            url = r.get("url", "Không rõ URL")
+            content = truncate_text(r.get("content", ""), 2000)
+            return f"[Nguồn Web: {title} | URL: {url}]\nNội dung: {content}"
+            
         context = build_limited_context(
             results,
-            lambda r: truncate_text(r.get("content", ""), 2000),
+            format_web_result,
             MAX_WEB_CONTEXT_CHARS
         )
         
         # Nháp câu trả lời dựa trên web search để chờ duyệt
-        prompt = f"""Dựa vào thông tin từ Web Search:
+        prompt = f"""Dựa vào thông tin từ Web Search (Các nguồn pháp lý chính thống):
 {context}
 
 Yêu cầu bắt buộc:
 - Ngay cả khi lấy dữ liệu từ Web, bạn vẫn BẮT BUỘC phải trích dẫn rõ tên Luật, Nghị định, Điều, Khoản mà bài báo/website nhắc đến (ví dụ: [Theo Luật Giao thông đường bộ 2008, Điều 5, Khoản 1]).
+- BẮT BUỘC chèn Link URL nguồn tham khảo ở cuối câu trả lời theo cấu trúc: [Nguồn tham khảo](URL) để người dùng có thể tự bấm vào đọc.
 - Tuyệt đối không trả lời suông mà không có nguồn gốc pháp lý rõ ràng.
-- Nếu thông tin từ Web không nhắc đến tên Điều/Luật cụ thể, hãy ghi chú thêm: "Tuy nhiên, bài viết/nguồn mạng không trích dẫn cụ thể căn cứ pháp lý".
+- Nếu bài viết từ Web không nhắc đến tên Điều/Luật cụ thể, hãy ghi chú thêm: "Tuy nhiên, bài viết/nguồn mạng không trích dẫn cụ thể căn cứ pháp lý".
 
 Câu hỏi: {state.get('question')}"""
         debug_llm_prompt("web_search_node", prompt)

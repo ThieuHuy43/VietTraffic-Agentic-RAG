@@ -260,8 +260,12 @@
     <script>
         // Cấu hình Marked.js để mở liên kết sang tab mới
         const renderer = new marked.Renderer();
-        renderer.link = function(href, title, text) {
-            return `<a target="_blank" rel="noopener" href="${href}" title="${title || ''}">${text}</a>`;
+        renderer.link = function(token) {
+            // Marked.js versions v12+ truyền vào một object `token`
+            const href = token.href || '';
+            const title = token.title || '';
+            const text = token.text || '';
+            return `<a target="_blank" rel="noopener" href="${href}" title="${title}">${text}</a>`;
         };
         marked.setOptions({ renderer: renderer, breaks: true });
 
