@@ -28,7 +28,50 @@ class QdrantHybridRetriever:
         # Load mô hình dense e5-small-v2
         self.dense_model = SentenceTransformer('intfloat/e5-small-v2')
         
-    def retrieve(self, query: str) -> List[Dict[str, Any]]:
+    def _build_filter(self, preferred_doc_types: List[str] | None = None) -> models.Filter:
+        must = []
+        if preferred_doc_types:
+            must.append(
+                models.FieldCondition(
+                    key="doc_type",
+                    match=models.MatchAny(any=preferred_doc_types)
+                )
+            )
+
+        return models.Filter(
+            must=must,
+            must_not=[
+                models.FieldCondition(
+                    key="status",
+                    match=models.MatchAny(any=["repealed", "superseded"])
+                )
+            ]
+        )
+
+    def _query(self, query: str, query_filter: models.Filter, limit: int):
+        dense_vec = self.dense_model.encode(f"query: {query}").tolist()
+        sparse_vec = create_sparse_vector(query)
+
+        return self.client.query_points(
+            collection_name=COLLECTION_NAME,
+            prefetch=[
+                models.Prefetch(
+                    query=dense_vec,
+                    using="dense",
+                    limit=limit * 2
+                ),
+                models.Prefetch(
+                    query=sparse_vec,
+                    using="sparse",
+                    limit=limit * 2
+                )
+            ],
+            query=models.FusionQuery(fusion=models.Fusion.RRF),
+            query_filter=query_filter,
+            limit=limit
+        )
+
+    def retrieve(self, query: str, preferred_doc_types: List[str] | None = None) -> List[Dict[str, Any]]:
         """
         Thực hiện truy vấn lấy các chunks liên quan.
         - Tìm kiếm Dense (Cosine Similarity) bằng e5-small-v2.
@@ -36,40 +79,12 @@ class QdrantHybridRetriever:
         - Kết hợp bằng thuật toán RRF.
         - Lọc bỏ các chunk từ các văn bản đã bị bãi bỏ (status="repealed").
         """
-        # Prefix "query:" bắt buộc đối với các mô hình e5
-        dense_vec = self.dense_model.encode(f"query: {query}").tolist()
-        sparse_vec = create_sparse_vector(query)
-        
-        # Payload Filter: Loại bỏ chunk có status="repealed"
-        query_filter = models.Filter(
-            must_not=[
-                models.FieldCondition(
-                    key="status",
-                    match=models.MatchValue(value="repealed")
-                )
-            ]
-        )
-        
         try:
-            # Dùng Qdrant Query API (hỗ trợ Fusion RRF từ bản 1.10+)
-            response = self.client.query_points(
-                collection_name=COLLECTION_NAME,
-                prefetch=[
-                    models.Prefetch(
-                        query=dense_vec,
-                        using="dense",
-                        limit=self.top_k * 2
-                    ),
-                    models.Prefetch(
-                        query=sparse_vec,
-                        using="sparse",
-                        limit=self.top_k * 2
-                    )
-                ],
-                query=models.FusionQuery(fusion=models.Fusion.RRF),
-                query_filter=query_filter,
-                limit=self.top_k
-            )
+            query_filter = self._build_filter(preferred_doc_types)
+            response = self._query(query, query_filter, self.top_k)
+
+            if preferred_doc_types and len(response.points) < max(2, self.top_k // 2):
+                response = self._query(query, self._build_filter(), self.top_k)
             
             # Trích xuất payload từ points trả về
             results = []

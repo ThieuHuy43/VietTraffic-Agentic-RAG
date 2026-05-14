@@ -14,7 +14,6 @@ MAX_WEB_CONTEXT_CHARS = 6000
 MAX_CHUNK_CHARS = 3500
 
 def estimate_tokens(text: str) -> int:
-    """Ước lượng nhanh số token để debug kích thước prompt trước khi gọi API."""
     return max(1, int(len(text) / 4))
 
 def debug_llm_prompt(node_name: str, prompt: str):
@@ -46,13 +45,27 @@ def build_limited_context(items, formatter, max_chars: int) -> str:
         total += len(part) + 1
     return "\n".join(parts)
 
+def preferred_doc_types_for_question(question: str):
+    q = (question or "").lower()
+    penalty_keywords = ["phạt", "mức phạt", "bao nhiêu tiền", "lỗi", "giam xe", "tạm giữ", "tước bằng"]
+    technical_keywords = ["biển báo", "vạch kẻ", "tốc độ", "đèn tín hiệu", "bằng b2", "giấy phép lái xe", "qcvn"]
+    law_keywords = ["được phép", "quy tắc", "độ tuổi", "trách nhiệm", "quyền", "nghĩa vụ"]
+
+    if any(k in q for k in penalty_keywords):
+        return ["nghi_dinh"]
+    if any(k in q for k in technical_keywords):
+        return ["quy_chuan", "thong_tu"]
+    if any(k in q for k in law_keywords):
+        return ["luat"]
+    return None
+
 # Khởi tạo mô hình
 if os.getenv("DEEPSEEK_API_KEY"):
     LLM_PROVIDER = "deepseek"
     from langchain_openai import ChatOpenAI
     llm = ChatOpenAI(
-        model="deepseek-v4-flash", 
-        api_key=os.getenv("DEEPSEEK_API_KEY"), 
+        model="deepseek-v4-flash",
+        api_key=os.getenv("DEEPSEEK_API_KEY"),
         base_url="https://api.deepseek.com",
         temperature=0
     )
@@ -91,8 +104,9 @@ def greeting_node(state):
 
 def retrieve_node(state):
     """Truy xuất tài liệu từ Qdrant (Hybrid + RRF)."""
-    retriever = QdrantHybridRetriever(top_k=2)
-    chunks = retriever.retrieve(state.get("question", ""))
+    question = state.get("question", "")
+    retriever = QdrantHybridRetriever(top_k=8)
+    chunks = retriever.retrieve(question, preferred_doc_types_for_question(question))
     return {"chunks": chunks}
 
 def grade_node(state):
@@ -103,7 +117,7 @@ def grade_node(state):
          
     context = build_limited_context(
         chunks,
-        lambda c: truncate_text(c["text"], MAX_CHUNK_CHARS),
+        lambda c: f"[{c.get('citation', c.get('doc_id', 'unknown'))}] {truncate_text(c['text'], MAX_CHUNK_CHARS)}",
         MAX_GRADE_CONTEXT_CHARS
     )
     prompt = f"""Đánh giá xem tài liệu sau có liên quan và đủ để trả lời câu hỏi không.
@@ -128,8 +142,15 @@ def web_search_node(state):
         )
         
         # Nháp câu trả lời dựa trên web search để chờ duyệt
-        prompt = f"""Dựa vào thông tin web: {context}
-Trả lời câu hỏi: {state.get('question')}"""
+        prompt = f"""Dựa vào thông tin từ Web Search:
+{context}
+
+Yêu cầu bắt buộc:
+- Ngay cả khi lấy dữ liệu từ Web, bạn vẫn BẮT BUỘC phải trích dẫn rõ tên Luật, Nghị định, Điều, Khoản mà bài báo/website nhắc đến (ví dụ: [Theo Luật Giao thông đường bộ 2008, Điều 5, Khoản 1]).
+- Tuyệt đối không trả lời suông mà không có nguồn gốc pháp lý rõ ràng.
+- Nếu thông tin từ Web không nhắc đến tên Điều/Luật cụ thể, hãy ghi chú thêm: "Tuy nhiên, bài viết/nguồn mạng không trích dẫn cụ thể căn cứ pháp lý".
+
+Câu hỏi: {state.get('question')}"""
         debug_llm_prompt("web_search_node", prompt)
         res = llm.invoke(prompt)
         return {"draft_answer": res.content}
@@ -159,6 +180,13 @@ def generate_node(state):
     
     for c in chunks:
         doc_id = c["doc_id"]
+        
+        # Rule 1: Bắt chặn luật hết hiệu lực ngay lập tức dù không lấy được bản thay thế
+        if c.get("status") == "superseded":
+            note = f"[CẢNH BÁO ĐỎ: Nguồn '{doc_id}' ĐÃ HẾT HIỆU LỰC (superseded). Tuyệt đối thận trọng khi tư vấn. Yêu cầu báo cho người dùng biết điều này nếu phải sử dụng nó.]"
+            if note not in conflict_notes:
+                conflict_notes.append(note)
+                
         if doc_id not in active_docs:
             active_docs[doc_id] = []
         active_docs[doc_id].append(c)
@@ -178,15 +206,21 @@ def generate_node(state):
         else:
             valid_chunks.extend(docs)
             
-    # Tạo context chuẩn
+    # Tạo context chuẩn: mỗi đoạn có citation machine-readable để LLM trích dẫn đúng.
     def format_chunk(c):
-        chuong = f"Chương {c['chuong']}" if c.get('chuong') else ""
-        dieu = f"Điều {c['dieu']}" if c.get('dieu') else ""
-        khoan = f"Khoản {c['khoan']}" if c.get('khoan') else ""
-        prefix = f"[{c['doc_id']} {chuong} {dieu} {khoan}]".strip()
+        citation = c.get("citation")
+        if not citation:
+            citation_parts = [c.get("doc_id", "unknown")]
+            if c.get("dieu"):
+                citation_parts.append(f"Điều {c['dieu']}")
+            if c.get("khoan"):
+                citation_parts.append(f"Khoản {c['khoan']}")
+            citation = ", ".join(citation_parts)
+
+        title = c.get("dieu_title") or c.get("chuong_title") or ""
         text = truncate_text(c["text"], MAX_CHUNK_CHARS)
-        return f"{prefix}: {text}"
-        
+        return f"Nguồn: [{citation}]\nTiêu đề: {title}\nNội dung: {text}"
+
     context_str = build_limited_context(
         valid_chunks,
         format_chunk,
@@ -195,13 +229,17 @@ def generate_node(state):
     notes_str = "\n".join(conflict_notes)
     
     prompt = f"""Bạn là Trợ lý Pháp luật Giao thông VN.
-Trả lời câu hỏi của người dùng dựa trên tài liệu pháp luật sau đây.
+Chỉ được trả lời dựa trên tài liệu trong Context bên dưới. Không dùng kiến thức ngoài Context.
+Nếu Context không có đủ căn cứ, hãy nói rõ: "Không tìm thấy thông tin đủ chắc chắn trong CSDL luật hiện có."
 
 {notes_str}
-Tài liệu:
+Context:
 {context_str}
 
-Yêu cầu bắt buộc: Trích dẫn rõ ràng [Tên văn bản, Điều X, Khoản Y] vào cuối mỗi lập luận.
+Yêu cầu bắt buộc:
+- Mỗi ý pháp lý hoặc mức phạt phải kết thúc bằng citation đúng nguyên văn từ dòng "Nguồn", ví dụ [NghiDinh_100_2019, Điều 5, Khoản 1].
+- Không trích dẫn nguồn không xuất hiện trong Context.
+- Trả lời súc tích, ưu tiên thông tin cốt lõi, không chép dài nguyên văn điều luật nếu không cần.
 
 Câu hỏi: {state.get('question')}
 """

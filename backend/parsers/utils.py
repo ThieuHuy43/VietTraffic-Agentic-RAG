@@ -35,6 +35,8 @@ class LegalStateTracker:
         self.current_chuong: Optional[int] = None
         self.current_dieu: Optional[int] = None
         self.current_khoan: Optional[int] = None
+        self.current_chuong_title: Optional[str] = None
+        self.current_dieu_title: Optional[str] = None
         
         self.chunks: List[Dict[str, Any]] = []
         self.current_text: List[str] = []
@@ -67,20 +69,43 @@ class LegalStateTracker:
 
         return parts
 
+    def _build_citation(self) -> str:
+        parts = [self.doc_id]
+        if self.current_dieu is not None:
+            parts.append(f"Điều {self.current_dieu}")
+        if self.current_khoan is not None:
+            parts.append(f"Khoản {self.current_khoan}")
+        return ", ".join(parts)
+
+    def _add_parent_context(self, text: str) -> str:
+        context_parts = []
+        if self.current_dieu_title and not text.startswith("Điều "):
+            context_parts.append(self.current_dieu_title)
+        elif self.current_chuong_title and not text.startswith("Chương "):
+            context_parts.append(self.current_chuong_title)
+
+        if not context_parts:
+            return text
+        return " ".join(context_parts + [text])
+
     def _append_chunk(self, text: str, part_index: int, total_parts: int):
+        text_with_context = self._add_parent_context(text)
         self.chunks.append({
             "doc_id": self.doc_id,
             "doc_type": self.doc_type,
             "chuong": self.current_chuong,
             "dieu": self.current_dieu,
             "khoan": self.current_khoan,
-            "text": text,
+            "chuong_title": self.current_chuong_title,
+            "dieu_title": self.current_dieu_title,
+            "text": text_with_context,
             "status": self.status,
             "effective_date": self.effective_date,
             "amends": self.amends,
             "supersedes": self.supersedes,
             "chunk_part": part_index,
             "chunk_total_parts": total_parts,
+            "citation": self._build_citation(),
         })
         
     def flush(self):
@@ -103,24 +128,28 @@ class LegalStateTracker:
         line = line.strip()
         if not line:
             return
+        normalized_line = line.lower()
             
         # Detect Chương (VD: Chương I, CHƯƠNG IV)
-        chuong_match = re.match(r'^Chương\s+([IVXLCDM]+)', line, re.IGNORECASE)
+        chuong_match = re.match(r'^chương\s+([ivxlcdm]+)', normalized_line)
         if chuong_match:
             self.flush()
             chuong_num = roman_to_int(chuong_match.group(1).upper())
             self.current_chuong = chuong_num if chuong_num > 0 else None
             self.current_dieu = None
             self.current_khoan = None
+            self.current_chuong_title = line
+            self.current_dieu_title = None
             self.current_text.append(line)
             return
             
         # Detect Điều (VD: Điều 1., Điều 2)
-        dieu_match = re.match(r'^Điều\s+(\d+)', line, re.IGNORECASE)
+        dieu_match = re.match(r'^điều\s+(\d+)', normalized_line)
         if dieu_match:
             self.flush()
             self.current_dieu = int(dieu_match.group(1))
             self.current_khoan = None
+            self.current_dieu_title = line
             self.current_text.append(line)
             return
             
