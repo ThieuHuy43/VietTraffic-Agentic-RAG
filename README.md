@@ -18,6 +18,12 @@ Hệ thống **VietTraffic-Agentic-RAG** là một ứng dụng Hỏi-Đáp (Q&A
 - **LLM & Tools:** Google Gemini API, Tavily Search API
 - **Deployment:** Docker, Docker Compose, Makefile, Shell/PowerShell scripts
 
+## 🖼️ Workflow
+
+![Workflow VietTraffic Agentic RAG](./workflow.png)
+
+Bản PDF gốc: [workflow.pdf](./workflow.pdf).
+
 ## 🚀 Hướng dẫn cài đặt và chạy ứng dụng
 
 ### 1. Yêu cầu hệ thống
@@ -82,7 +88,9 @@ VietTraffic-Agentic-RAG/
 ├── docker-compose.yml  # File cấu hình để dựng toàn bộ các dịch vụ
 ├── Makefile            # Chứa các lệnh tắt để deploy
 ├── deploy.sh           # Script khởi chạy cho Linux/macOS
-└── deploy.ps1          # Script khởi chạy cho Windows
+├── deploy.ps1          # Script khởi chạy cho Windows
+├── workflow.png        # Ảnh workflow hiển thị trong README
+└── workflow.pdf        # Bản PDF gốc của workflow
 ```
 
 ## 🤝 Đóng góp
