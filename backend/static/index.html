@@ -275,6 +275,19 @@
             align-items: center;
             gap: 6px;
         }
+
+        /* Thinking process indicator */
+        .thinking-step {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .step-text {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            transition: opacity 0.2s ease;
+        }
     </style>
 </head>
 
@@ -343,8 +356,19 @@
             chat.scrollTo({ top: chat.scrollHeight, behavior: 'smooth' });
         }
 
-        function showTyping(id) {
-            return addMessage('bot', `<div class="typing"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>`, id);
+        function showTyping(id, stepText = 'Đang xử lý câu hỏi...') {
+            return addMessage('bot', `
+                <div class="thinking-step">
+                    <div class="typing"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+                    <span class="step-text">${stepText}</span>
+                </div>`, id);
+        }
+
+        function updateThinkingStep(botDiv, stepText) {
+            const stepEl = botDiv.querySelector('.step-text');
+            if (stepEl) {
+                stepEl.textContent = stepText;
+            }
         }
 
         // Parse citation [Luat ABC, Dieu X] -> style citation
@@ -384,7 +408,9 @@
                         if (line.startsWith('data: ')) {
                             try {
                                 const data = JSON.parse(line.replace('data: ', ''));
-                                if (data.status === 'done') {
+                                if (data.status === 'step') {
+                                    updateThinkingStep(botDiv, data.message);
+                                } else if (data.status === 'done') {
                                     botDiv.innerHTML = formatMarkdown(data.answer);
                                     scrollToBottom();
                                 } else if (data.status === 'pending') {

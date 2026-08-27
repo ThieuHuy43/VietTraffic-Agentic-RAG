@@ -1,0 +1,66 @@
+{
+  "Luat_23_2008_GiaoThongDuongBo.html": {
+    "doc_id": "Luat_23_2008",
+    "doc_type": "luat",
+    "status": "superseded",
+    "effective_date": "2009-07-01",
+    "amends": null,
+    "supersedes": null
+  },
+  "Luat_36_2024_TratTuAnToanGiaoThongDuongBo.docx": {
+    "doc_id": "Luat_36_2024",
+    "doc_type": "luat",
+    "status": "active",
+    "effective_date": "2025-01-01",
+    "amends": null,
+    "supersedes": "Luat_23_2008"
+  },
+  "Luat_35_2024_DuongBo.html": {
+    "doc_id": "Luat_35_2024",
+    "doc_type": "luat",
+    "status": "active",
+    "effective_date": "2025-01-01",
+    "amends": null,
+    "supersedes": "Luat_23_2008"
+  },
+  "NGHỊ ĐỊNH 100_2019_NĐ-CP về QUY ĐỊNH XỬ PHẠT VI PHẠM HÀNH CHÍNH TRONG LĨNH VỰC GIAO THÔNG ĐƯỜNG BỘ VÀ ĐƯỜNG SẮT.html": {
+    "doc_id": "NghiDinh_100_2019",
+    "doc_type": "nghi_dinh",
+    "status": "active",
+    "effective_date": "2020-01-01",
+    "amends": null,
+    "supersedes": null
+  },
+  "NGHỊ ĐỊNH 123_2021_NĐ-CP SỬA ĐỔI, BỔ SUNG MỘT SỐ ĐIỀU CỦA CÁC NGHỊ ĐỊNH QUY ĐỊNH XỬ PHẠT VI PHẠM HÀNH CHÍNH TRONG HÀNG HẢI; GIAO THÔNG Đường bộ, đường sắt mới nhất.html": {
+    "doc_id": "NghiDinh_123_2021",
+    "doc_type": "nghi_dinh",
+    "status": "active",
+    "effective_date": "2022-01-01",
+    "amends": "NghiDinh_100_2019",
+    "supersedes": null
+  },
+  "Thông tư 12_2017_TT-BGTVT đào tạo sát hạch cấp giấy phép lái xe cơ giới đường bộ.html": {
+    "doc_id": "ThongTu_12_2017",
+    "doc_type": "thong_tu",
+    "status": "active",
+    "effective_date": "2017-06-01",
+    "amends": null,
+    "supersedes": null
+  },
+  "Thông tư 31_2019_TT-BGTVT quy định về tốc độ và khoảng cách an toàn của xe cơ giới.html": {
+    "doc_id": "ThongTu_31_2019",
+    "doc_type": "thong_tu",
+    "status": "active",
+    "effective_date": "2019-10-15",
+    "amends": null,
+    "supersedes": null
+  },
+  "quy-chuan-ky-thuat-qcvn-41-2019-bgtvt-bao-hieu-duong-bo.pdf": {
+    "doc_id": "QCVN_41_2019",
+    "doc_type": "quy_chuan",
+    "status": "active",
+    "effective_date": "2020-07-01",
+    "amends": null,
+    "supersedes": null
+  }
+}

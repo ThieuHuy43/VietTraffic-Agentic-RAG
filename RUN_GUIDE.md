@@ -8,7 +8,6 @@ Tài liệu này tổng hợp toàn bộ các câu lệnh cần thiết để b�
 Trước khi chạy bất kỳ lệnh nào, hãy đảm bảo bạn đã điền đầy đủ các API Key vào file `.env` tại thư mục gốc:
 ```env
 GEMINI_API_KEY=your_key
-GROQ_API_KEY=your_key
 DEEPSEEK_API_KEY=your_key
 TAVILY_API_KEY=your_key
 ```

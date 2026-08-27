@@ -37,15 +37,27 @@ class ResumeRequest(BaseModel):
     action: str  # "approve", "edit", "reject"
     edited_content: Optional[str] = None
 
+# Mô tả (tiếng Việt, thân thiện) cho từng bước thật trong LangGraph, để hiện tiến trình "thinking"
+# cho người dùng qua SSE — phản ánh đúng công việc backend đang làm, không phải giả lập.
+STEP_LABELS = {
+    "router_node": "Đang xác định loại câu hỏi...",
+    "retrieve_node": "Đang tìm kiếm trong cơ sở dữ liệu luật...",
+    "grade_node": "Đang đánh giá mức độ liên quan của dữ liệu tìm được...",
+    "web_search_node": "Không đủ dữ liệu nội bộ, đang tìm kiếm thêm từ nguồn uy tín trên mạng...",
+    "generate_node": "Đang soạn câu trả lời...",
+}
+
 @app.post("/chat")
 def chat_endpoint(req: ChatRequest):
     """
     Endpoint Chat.
     Thực thi LangGraph và stream SSE. Nếu bị ngắt bởi HITL, trả về status="pending".
+    Mỗi khi một node trong graph hoàn tất, gửi thêm event status="step" kèm mô tả bước đó
+    để frontend hiện tiến trình xử lý thật (thinking) cho người dùng.
     """
     thread_id = req.thread_id or str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
-    
+
     def event_generator():
         try:
             for event in agent_app.stream({"question": req.question}, config=config):
@@ -54,13 +66,16 @@ def chat_endpoint(req: ChatRequest):
                 if state.next and "process_hitl_node" in state.next:
                     yield f"data: {json.dumps({'status': 'pending', 'message': 'Đang chờ Admin duyệt kết quả tìm kiếm ngoài (HITL)...', 'thread_id': thread_id}, ensure_ascii=False)}\n\n"
                     break
-                    
+
                 for node, update in event.items():
+                    label = STEP_LABELS.get(node)
+                    if label:
+                        yield f"data: {json.dumps({'status': 'step', 'step': node, 'message': label, 'thread_id': thread_id}, ensure_ascii=False)}\n\n"
                     if "final_answer" in update:
                         yield f"data: {json.dumps({'status': 'done', 'answer': update['final_answer'], 'thread_id': thread_id}, ensure_ascii=False)}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'status': 'error', 'message': f'Lỗi hệ thống: {str(e)}', 'thread_id': thread_id}, ensure_ascii=False)}\n\n"
-            
+
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @app.get("/pending")

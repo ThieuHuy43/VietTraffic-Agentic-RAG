@@ -37,11 +37,14 @@ venv.bak/
 checkpoints/*.sqlite
 checkpoints/*.db
 checkpoints
-# Qdrant Data (if tested locally)
-data/qdrant_data/
 
 # OS specific
 .DS_Store
 Thumbs.db
 
-**/data
+# Data directory: ignore nội dung thô/runtime (raw_laws có thể chứa tài liệu bản quyền,
+# qdrant_data là dữ liệu binary local), nhưng track metadata/docs nhỏ để có version history.
+data/*
+!data/metadata.json
+!data/rules.md
+!data/data_description.md
