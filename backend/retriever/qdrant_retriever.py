@@ -77,8 +77,11 @@ class QdrantHybridRetriever:
             limit=limit
         )
 
-    def _rerank(self, query: str, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Rerank candidate chunks bằng cross-encoder (query, chunk_text) rồi cắt xuống top_k.
+    def _rerank(
+        self, query: str, candidates: List[Dict[str, Any]], top_k: int | None = None
+    ) -> List[Dict[str, Any]]:
+        """Rerank candidate chunks bằng cross-encoder (query, chunk_text) rồi cắt xuống top_k
+        (mặc định self.top_k, có thể override — VD câu hỏi nhiều vi phạm cần nhiều chunk hơn).
         RRF một mình dễ xếp nhầm các đoạn "sửa đổi, bổ sung" na ná nhau lên trên đoạn thực sự
         liên quan; cross-encoder chấm điểm trực tiếp mức độ khớp ngữ nghĩa giữa query và từng
         đoạn nên đáng tin cậy hơn nhiều cho việc xếp hạng cuối cùng."""
@@ -91,7 +94,7 @@ class QdrantHybridRetriever:
         # trong khi câu trả lời pháp lý dài ngắn rất khác nhau (từ vài trăm tới ~3500 ký tự).
         scores = self.reranker.predict(pairs, batch_size=4, show_progress_bar=False)
         ranked = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)
-        return [c for c, _ in ranked[: self.top_k]]
+        return [c for c, _ in ranked[: top_k or self.top_k]]
 
     def retrieve(self, query: str, preferred_doc_types: List[str] | None = None) -> List[Dict[str, Any]]:
         """
@@ -120,15 +123,19 @@ class QdrantHybridRetriever:
         return {point.id: point.payload for point in response.points if point.payload}
 
     def rerank_merged(
-        self, rerank_query: str, candidate_dicts: List[Dict[Any, Dict[str, Any]]]
+        self,
+        rerank_query: str,
+        candidate_dicts: List[Dict[Any, Dict[str, Any]]],
+        top_k: int | None = None,
     ) -> List[Dict[str, Any]]:
         """Gộp nhiều candidate pool (mỗi cái từ 1 lần gọi fetch_candidates, có thể ở thời điểm
-        khác nhau) theo point_id rồi rerank 1 lần bằng rerank_query."""
+        khác nhau) theo point_id rồi rerank 1 lần bằng rerank_query. top_k override cho phép lấy
+        nhiều chunk hơn self.top_k khi câu hỏi có nhiều khía cạnh (VD nhiều vi phạm cùng lúc)."""
         merged: Dict[Any, Dict[str, Any]] = {}
         for candidates in candidate_dicts:
             for point_id, payload in candidates.items():
                 merged.setdefault(point_id, payload)
-        return self._rerank(rerank_query, list(merged.values()))
+        return self._rerank(rerank_query, list(merged.values()), top_k=top_k)
 
     def retrieve_multi(
         self, queries: List[str], preferred_doc_types: List[str] | None = None

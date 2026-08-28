@@ -4,6 +4,10 @@ class AgentState(TypedDict, total=False):
     question: str
     intent: str
     expanded_query: Optional[str]
+    # Nếu câu hỏi hỏi nhiều vi phạm/khía cạnh pháp lý riêng biệt cùng lúc (VD: tính tổng mức phạt
+    # nhiều lỗi), router_node tách mỗi cái thành 1 câu hỏi độc lập ở đây để retrieve_node truy
+    # riêng từng cái (tránh gộp chung làm loãng embedding, cùng vấn đề đã gặp với expanded_query).
+    sub_queries: List[str]
     chunks: List[Dict[str, Any]]
     is_relevant: bool
     draft_answer: Optional[str]

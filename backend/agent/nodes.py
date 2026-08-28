@@ -4,7 +4,7 @@ import re
 import sys
 import threading
 import time
-from typing import Any, Dict, Literal
+from typing import Any, Dict, List, Literal
 from pydantic import BaseModel
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.tools.tavily_search import TavilySearchResults
@@ -125,6 +125,12 @@ def is_greeting(question: str) -> bool:
 class RouterOutput(BaseModel):
     intent: Literal["hoi_luat", "chao_hoi"]
     expanded_query: str
+    # Nếu câu hỏi hỏi về NHIỀU hành vi vi phạm/khía cạnh pháp lý riêng biệt cùng lúc (VD: "vượt
+    # đèn đỏ VÀ không đội mũ bảo hiểm VÀ không mang bằng lái, tổng phạt bao nhiêu?"), liệt kê mỗi
+    # hành vi thành 1 câu hỏi độc lập ở đây để retrieve_node truy riêng từng cái - tránh gộp
+    # chung 1 câu hỏi dài làm loãng embedding (cùng vấn đề đã xác minh với expand_query trước
+    # đây). Rỗng nếu câu hỏi chỉ hỏi về 1 vấn đề duy nhất.
+    sub_queries: List[str] = []
 
 class GradeOutput(BaseModel):
     is_relevant: bool
@@ -199,7 +205,7 @@ def router_node(state, config=None):
     # Fast-path: lời chào ngắn, rõ ràng thì bỏ qua lượt gọi LLM (và bỏ qua cả speculative fetch -
     # nhánh chao_hoi không bao giờ tới retrieve_node nên submit sẽ lãng phí).
     if is_greeting(question):
-        return {"intent": "chao_hoi", "expanded_query": question}
+        return {"intent": "chao_hoi", "expanded_query": question, "sub_queries": []}
 
     thread_id = (config or {}).get("configurable", {}).get("thread_id")
     if thread_id:
@@ -220,18 +226,28 @@ dùng trong luật/nghị định (ví dụ: "vượt đèn đỏ" -> "không ch
 thông"; "kẹp 3" -> "chở quá số người quy định"). Nếu câu hỏi đã độc lập, chỉ cần diễn giải thuật
 ngữ như bình thường. Nếu là 'chao_hoi', giữ nguyên câu hỏi gốc cho trường QUERY.
 
+Nếu câu hỏi hỏi về NHIỀU hành vi vi phạm/khía cạnh pháp lý RIÊNG BIỆT cùng lúc (ví dụ: "tôi vượt
+đèn đỏ và không đội mũ bảo hiểm và không mang bằng lái, tổng phạt bao nhiêu?"), liệt kê MỖI hành vi
+thành 1 câu hỏi độc lập (đã diễn giải thuật ngữ pháp lý), phân cách bằng " | ", vào trường
+SUBQUERIES. Nếu câu hỏi chỉ hỏi về 1 vấn đề duy nhất, để SUBQUERIES là "không có".
+
 Câu hỏi mới nhất: {question}
 
 Trả lời ĐÚNG theo định dạng sau, không thêm giải thích:
 INTENT: <hoi_luat hoặc chao_hoi>
-QUERY: <câu hỏi đã viết lại>"""
+QUERY: <câu hỏi đã viết lại>
+SUBQUERIES: <vi phạm 1 | vi phạm 2 | ... hoặc "không có">"""
     debug_llm_prompt("router_node", prompt)
 
     if _structured_output_supported:
         try:
             structured_llm = get_structured_llm(RouterOutput)
             result = structured_llm.invoke(prompt)  # thử 1 lần, không retry (lỗi không hỗ trợ là vĩnh viễn)
-            return {"intent": result.intent, "expanded_query": result.expanded_query or question}
+            return {
+                "intent": result.intent,
+                "expanded_query": result.expanded_query or question,
+                "sub_queries": result.sub_queries,
+            }
         except Exception as e:
             _mark_structured_output_unsupported()
             print(f"[WARN] Structured output thất bại ở router_node, fallback sang parse string: {e}", flush=True)
@@ -239,13 +255,21 @@ QUERY: <câu hỏi đã viết lại>"""
     res = invoke_with_retry(lambda: llm.invoke(prompt))
     content = res.content.strip()
     intent_match = re.search(r"INTENT:\s*(\w+)", content, re.IGNORECASE)
-    query_match = re.search(r"QUERY:\s*(.+)", content, re.IGNORECASE | re.DOTALL)
+    query_match = re.search(r"QUERY:\s*(.+?)(?:\n+SUBQUERIES:|\Z)", content, re.IGNORECASE | re.DOTALL)
+    subqueries_match = re.search(r"SUBQUERIES:\s*(.+)", content, re.IGNORECASE | re.DOTALL)
     intent = "chao_hoi" if intent_match and "chao_hoi" in intent_match.group(1).lower() else "hoi_luat"
     expanded_query = query_match.group(1).strip() if query_match else question
-    return {"intent": intent, "expanded_query": expanded_query or question}
+    sub_queries = []
+    if subqueries_match:
+        raw = subqueries_match.group(1).strip()
+        if "không có" not in raw.lower():
+            sub_queries = [s.strip() for s in raw.split("|") if s.strip()]
+    return {"intent": intent, "expanded_query": expanded_query or question, "sub_queries": sub_queries}
 
 def greeting_node(state):
     return {"final_answer": "Chào bạn, tôi là Trợ lý Pháp luật Giao thông Việt Nam. Tôi có thể giúp gì cho bạn?"}
+
+MAX_SUB_QUERIES = 4  # giới hạn số vi phạm/khía cạnh retrieve riêng, tránh cost tăng vô hạn
 
 def retrieve_node(state, config=None):
     """Truy xuất tài liệu từ Qdrant (Hybrid + RRF). Truy riêng câu hỏi gốc + bản diễn giải (đã
@@ -256,9 +280,14 @@ def retrieve_node(state, config=None):
 
     Câu hỏi GỐC: lấy từ future do router_node submit trước đó (speculative retrieval - khả năng
     cao đã fetch xong vì router_node vừa mất 2-10s+ để gọi LLM); fallback tự fetch đồng bộ nếu
-    không có future (resume sau HITL, hoặc gọi graph trực tiếp không qua config/thread_id)."""
+    không có future (resume sau HITL, hoặc gọi graph trực tiếp không qua config/thread_id).
+
+    Câu hỏi hỏi NHIỀU vi phạm/khía cạnh cùng lúc (VD tính tổng mức phạt nhiều lỗi): router_node
+    đã tách sẵn thành sub_queries, ở đây truy RIÊNG từng cái (cùng lý do tránh pha loãng embedding
+    như trên) và nới top_k để đủ chỗ cho chunk của mỗi vi phạm thay vì chỉ top_k mặc định."""
     question = state.get("question", "")
     expanded = state.get("expanded_query") or question
+    sub_queries = (state.get("sub_queries") or [])[:MAX_SUB_QUERIES]
     preferred_doc_types = preferred_doc_types_for_question(question)
     retriever = get_retriever()
 
@@ -280,8 +309,13 @@ def retrieve_node(state, config=None):
     candidate_dicts = [original_candidates]
     if expanded.strip().lower() != question.strip().lower():
         candidate_dicts.append(retriever.fetch_candidates(expanded, preferred_doc_types))
+    for sub_q in sub_queries:
+        candidate_dicts.append(retriever.fetch_candidates(sub_q, preferred_doc_types))
 
-    chunks = retriever.rerank_merged(expanded, candidate_dicts)
+    # Nhiều vi phạm -> cần nhiều chunk hơn để mỗi vi phạm đều có đủ căn cứ trong context, không
+    # chỉ top_k mặc định (vốn tính cho 1 vấn đề duy nhất).
+    top_k = min(20, 6 * len(sub_queries)) if len(sub_queries) > 1 else None
+    chunks = retriever.rerank_merged(expanded, candidate_dicts, top_k=top_k)
     return {"chunks": chunks}
 
 def effective_question(state) -> str:
@@ -494,11 +528,26 @@ def generate_node(state):
         MAX_GENERATE_CONTEXT_CHARS
     )
     notes_str = "\n".join(conflict_notes)
-    
+
+    sub_queries = state.get("sub_queries") or []
+    multi_violation_instruction = ""
+    if len(sub_queries) > 1:
+        violations_list = "\n".join(f"- {v}" for v in sub_queries)
+        multi_violation_instruction = f"""
+Câu hỏi này hỏi về NHIỀU hành vi vi phạm cùng lúc:
+{violations_list}
+Trả lời theo dạng DANH SÁCH, mỗi hành vi 1 mục riêng kèm mức phạt + citation riêng (nếu Context có
+đủ căn cứ cho hành vi đó; nếu thiếu thì ghi rõ "không tìm thấy thông tin cho hành vi này" thay vì
+bỏ qua). Sau đó thêm mục "**Tổng cộng**": cộng các khoảng tiền phạt tìm được lại (VD 200.000-
+300.000đ + 3.000.000-5.000.000đ = 3.200.000-5.300.000đ), và nêu rõ đây là tổng ước tính từ các mức
+phạt riêng lẻ, có thể còn hình phạt bổ sung (tước GPLX, tạm giữ phương tiện...) nếu Context có đề
+cập.
+"""
+
     prompt = f"""Bạn là Trợ lý Pháp luật Giao thông VN.
 Chỉ được trả lời dựa trên tài liệu trong Context bên dưới. Không dùng kiến thức ngoài Context.
 Nếu Context không có đủ căn cứ, hãy nói rõ: "Không tìm thấy thông tin đủ chắc chắn trong CSDL luật hiện có."
-
+{multi_violation_instruction}
 {notes_str}
 Context:
 {context_str}
