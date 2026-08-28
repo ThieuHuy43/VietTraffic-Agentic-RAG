@@ -72,7 +72,7 @@ def preferred_doc_types_for_question(question: str):
         return ["luat"]
     return None
 
-_llm_executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+_llm_executor = concurrent.futures.ThreadPoolExecutor(max_workers=12)
 
 def invoke_with_retry(fn, retries: int = 2, base_delay: float = 1.0, timeout: float = 25.0):
     """Gọi fn() (LLM invoke, tool call...) với retry + backoff cho lỗi thoáng qua (rate limit,
@@ -277,17 +277,23 @@ Tài liệu: {context}
 Trả lời (yes/no):"""
     debug_llm_prompt("grade_node", prompt)
 
-    if _grade_once(prompt):
-        return {"is_relevant": True}
-
     # DeepSeek (và nhiều model MoE khác) không hoàn toàn deterministic dù temperature=0, nhất là
     # ở câu hỏi biên (borderline): đã xác minh thực tế cùng 1 context ~16000 ký tự (không đổi
-    # giữa các lần gọi) nhưng verdict đổi qua lại yes/no giữa 5 lần gọi liên tiếp. Gọi lại 1 lần
-    # nếu lần đầu "no" (self-consistency 2 lượt, thiên về "yes" nếu 1 trong 2 lượt đồng ý) để
-    # giảm rủi ro rơi oan vào HITL/web_search chỉ vì 1 lần LLM đoán sai, đổi lại thêm ~1 lượt gọi
-    # LLM CHỈ trên nhánh "no" (không ảnh hưởng latency của các câu trả lời ngay từ lần đầu).
-    print("[DEBUG] grade_node lần 1 = no, gọi lại lần 2 (self-consistency)...", flush=True)
-    return {"is_relevant": _grade_once(prompt)}
+    # giữa các lần gọi) nhưng verdict đổi qua lại yes/no giữa 5 lần gọi liên tiếp. Chạy 2 lượt
+    # self-consistency SONG SONG (độc lập, cùng prompt) qua _llm_executor thay vì tuần tự — lấy
+    # kết quả "yes" đầu tiên (short-circuit), không cần đợi lượt còn lại. Giữ nguyên lợi ích giảm
+    # rủi ro rơi oan vào HITL/web_search vì 1 lần LLM đoán sai, nhưng KHÔNG cộng dồn latency của
+    # 2 lượt gọi tuần tự (trước đây lượt 2 chỉ bắt đầu sau khi lượt 1 xong).
+    futures = [_llm_executor.submit(_grade_once, prompt) for _ in range(2)]
+    is_relevant = False
+    for future in concurrent.futures.as_completed(futures):
+        try:
+            if future.result():
+                is_relevant = True
+                break
+        except Exception as e:
+            print(f"[WARN] grade_node self-consistency 1 nhánh lỗi: {e}", flush=True)
+    return {"is_relevant": is_relevant}
 
 def web_search_node(state):
     """Sử dụng Tavily để tìm kiếm ngoài khi tài liệu Qdrant không đủ."""
