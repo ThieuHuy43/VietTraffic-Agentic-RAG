@@ -1,0 +1,58 @@
+[
+  {
+    "id": "helmet_fine",
+    "category": "muc_phat",
+    "question": "Không đội mũ bảo hiểm khi đi xe máy bị phạt bao nhiêu tiền?",
+    "expected_doc_id": "NghiDinh_100_2019",
+    "expected_dieu": 6,
+    "expected_khoan": 2
+  },
+  {
+    "id": "bien_tron_kich_thuoc",
+    "category": "qcvn_bang",
+    "question": "Đường kính ngoài của biển báo cấm hình tròn là bao nhiêu cm?",
+    "expected_doc_id": "QCVN_41_2019",
+    "expected_dieu": 16,
+    "expected_khoan": null
+  },
+  {
+    "id": "bien_tam_giac_canh",
+    "category": "qcvn_bang",
+    "question": "Chiều dài cạnh của biển báo hình tam giác là bao nhiêu cm?",
+    "expected_doc_id": "QCVN_41_2019",
+    "expected_dieu": 16,
+    "expected_khoan": null
+  },
+  {
+    "id": "cho_qua_nguoi_xe_may",
+    "category": "muc_phat",
+    "question": "Chở quá số người quy định trên xe máy bị phạt thế nào?",
+    "expected_doc_id": "NghiDinh_100_2019",
+    "expected_dieu": 6,
+    "expected_khoan": 2
+  },
+  {
+    "id": "toc_do_xe_gan_may_khu_dong_dan_cu",
+    "category": "quy_tac",
+    "question": "Tốc độ tối đa cho phép của xe máy trong khu vực đông dân cư là bao nhiêu?",
+    "expected_doc_id": "ThongTu_31_2019",
+    "expected_dieu": 8,
+    "expected_khoan": null
+  },
+  {
+    "id": "vuot_den_do_oto",
+    "category": "muc_phat",
+    "question": "Vượt đèn đỏ đối với ô tô bị phạt bao nhiêu tiền?",
+    "expected_doc_id": "NghiDinh_100_2019",
+    "expected_dieu": 5,
+    "expected_khoan": 5
+  },
+  {
+    "id": "khong_mang_gplx_xe_may",
+    "category": "muc_phat",
+    "question": "Không mang giấy phép lái xe khi điều khiển xe máy bị phạt bao nhiêu?",
+    "expected_doc_id": "NghiDinh_100_2019",
+    "expected_dieu": 21,
+    "expected_khoan": 2
+  }
+]
