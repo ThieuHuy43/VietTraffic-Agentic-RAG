@@ -2,8 +2,9 @@ import concurrent.futures
 import os
 import re
 import sys
+import threading
 import time
-from typing import Literal
+from typing import Any, Dict, Literal
 from pydantic import BaseModel
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.tools.tavily_search import TavilySearchResults
@@ -73,6 +74,13 @@ def preferred_doc_types_for_question(question: str):
     return None
 
 _llm_executor = concurrent.futures.ThreadPoolExecutor(max_workers=12)
+
+# Speculative retrieval: router_node submit truy vấn Qdrant cho câu hỏi GỐC ngay khi bắt đầu
+# (song song với lượt gọi LLM của chính nó), lưu future theo thread_id để retrieve_node lấy lại
+# kết quả (đã fetch xong hoặc gần xong, vì router_node luôn mất 2-10s+) thay vì phải tự fetch từ
+# đầu. Có lock vì nhiều request (thread_id khác nhau) có thể chạy đồng thời qua FastAPI threadpool.
+_speculative_futures: Dict[str, "concurrent.futures.Future"] = {}
+_speculative_lock = threading.Lock()
 
 def invoke_with_retry(fn, retries: int = 2, base_delay: float = 1.0, timeout: float = 25.0):
     """Gọi fn() (LLM invoke, tool call...) với retry + backoff cho lỗi thoáng qua (rate limit,
@@ -174,18 +182,32 @@ def format_chat_history(chat_history: list, max_turns: int = 3) -> str:
         turns.append(f"Người dùng: {turn.get('question', '')}\nTrợ lý: {turn.get('answer', '')}")
     return "Lịch sử hội thoại gần đây:\n" + "\n\n".join(turns) + "\n\n"
 
-def router_node(state):
+def router_node(state, config=None):
     """Phân loại intent CÙNG LÚC với diễn giải câu hỏi (chuẩn hoá follow-up + thuật ngữ pháp lý)
     trong 1 lượt gọi LLM duy nhất — trước đây đây là 2 lượt riêng (router_node cũ chỉ phân loại,
     rồi expand_query() gọi lại bên trong retrieve_node). Gộp lại giảm 1/4 số lượt gọi LLM tuần
     tự mỗi request, đồng thời giảm 1 điểm rủi ro "trúng" đúng lúc DeepSeek bị chậm bất thường
-    (đã đo thực tế 1 lượt gọi đơn lẻ có thể mất 125s+ dù không có lỗi)."""
+    (đã đo thực tế 1 lượt gọi đơn lẻ có thể mất 125s+ dù không có lỗi).
+
+    Speculative retrieval: submit truy vấn Qdrant cho câu hỏi GỐC ngay tại đây (chạy nền song
+    song với lượt gọi LLM bên dưới, không đợi LLM xong) — đã đo thực tế retrieve_node (thuần
+    CPU/Qdrant, không LLM) luôn ổn định ~5s trong khi router_node mất 2-10s+, nên phần lớn thời
+    gian retrieve câu hỏi gốc có thể chồng lấp vào lúc LLM đang chạy thay vì đợi tuần tự."""
     question = state.get("question", "")
     chat_history = state.get("chat_history", [])
 
-    # Fast-path: lời chào ngắn, rõ ràng thì bỏ qua lượt gọi LLM.
+    # Fast-path: lời chào ngắn, rõ ràng thì bỏ qua lượt gọi LLM (và bỏ qua cả speculative fetch -
+    # nhánh chao_hoi không bao giờ tới retrieve_node nên submit sẽ lãng phí).
     if is_greeting(question):
         return {"intent": "chao_hoi", "expanded_query": question}
+
+    thread_id = (config or {}).get("configurable", {}).get("thread_id")
+    if thread_id:
+        future = _llm_executor.submit(
+            get_retriever().fetch_candidates, question, preferred_doc_types_for_question(question)
+        )
+        with _speculative_lock:
+            _speculative_futures[thread_id] = future
 
     history_str = format_chat_history(chat_history)
     prompt = f"""{history_str}Phân loại câu hỏi mới nhất của người dùng vào 1 trong 2 loại:
@@ -225,16 +247,41 @@ QUERY: <câu hỏi đã viết lại>"""
 def greeting_node(state):
     return {"final_answer": "Chào bạn, tôi là Trợ lý Pháp luật Giao thông Việt Nam. Tôi có thể giúp gì cho bạn?"}
 
-def retrieve_node(state):
+def retrieve_node(state, config=None):
     """Truy xuất tài liệu từ Qdrant (Hybrid + RRF). Truy riêng câu hỏi gốc + bản diễn giải (đã
-    chuẩn hóa follow-up + thuật ngữ pháp lý, do router_node sinh ra) rồi gộp candidate pool
-    (retrieve_multi), THAY VÌ nối chuỗi 2 câu thành 1 query dài — đã xác minh thực tế nối chuỗi
-    có thể pha loãng dense embedding khiến chunk đúng bị rớt khỏi candidate pool dù truy riêng
-    câu hỏi gốc vẫn tìm thấy đúng."""
+    chuẩn hóa follow-up + thuật ngữ pháp lý, do router_node sinh ra) rồi gộp candidate pool,
+    THAY VÌ nối chuỗi 2 câu thành 1 query dài — đã xác minh thực tế nối chuỗi có thể pha loãng
+    dense embedding khiến chunk đúng bị rớt khỏi candidate pool dù truy riêng câu hỏi gốc vẫn
+    tìm thấy đúng.
+
+    Câu hỏi GỐC: lấy từ future do router_node submit trước đó (speculative retrieval - khả năng
+    cao đã fetch xong vì router_node vừa mất 2-10s+ để gọi LLM); fallback tự fetch đồng bộ nếu
+    không có future (resume sau HITL, hoặc gọi graph trực tiếp không qua config/thread_id)."""
     question = state.get("question", "")
     expanded = state.get("expanded_query") or question
-    queries = [question] if expanded.strip().lower() == question.strip().lower() else [question, expanded]
-    chunks = get_retriever().retrieve_multi(queries, preferred_doc_types_for_question(question))
+    preferred_doc_types = preferred_doc_types_for_question(question)
+    retriever = get_retriever()
+
+    thread_id = (config or {}).get("configurable", {}).get("thread_id")
+    future = None
+    if thread_id:
+        with _speculative_lock:
+            future = _speculative_futures.pop(thread_id, None)
+
+    if future is not None:
+        try:
+            original_candidates = future.result(timeout=15)
+        except Exception as e:
+            print(f"[WARN] Speculative retrieval thất bại/timeout, fetch lại đồng bộ: {e}", flush=True)
+            original_candidates = retriever.fetch_candidates(question, preferred_doc_types)
+    else:
+        original_candidates = retriever.fetch_candidates(question, preferred_doc_types)
+
+    candidate_dicts = [original_candidates]
+    if expanded.strip().lower() != question.strip().lower():
+        candidate_dicts.append(retriever.fetch_candidates(expanded, preferred_doc_types))
+
+    chunks = retriever.rerank_merged(expanded, candidate_dicts)
     return {"chunks": chunks}
 
 def effective_question(state) -> str:

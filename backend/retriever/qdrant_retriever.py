@@ -85,7 +85,11 @@ class QdrantHybridRetriever:
         if not candidates:
             return candidates
         pairs = [(query, c["text"]) for c in candidates]
-        scores = self.reranker.predict(pairs)
+        # batch_size nhỏ NHANH HƠN mặc định (32) trên CPU: đã đo thực tế ~49 candidate mất 3.1s
+        # với batch_size=1-2 so với 5.2-7.3s với batch_size=32-64 — batch lớn trên CPU (không có
+        # song song hoá như GPU) tốn thêm compute vì phải pad các câu trong batch về cùng độ dài,
+        # trong khi câu trả lời pháp lý dài ngắn rất khác nhau (từ vài trăm tới ~3500 ký tự).
+        scores = self.reranker.predict(pairs, batch_size=4, show_progress_bar=False)
         ranked = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)
         return [c for c, _ in ranked[: self.top_k]]
 
@@ -100,6 +104,32 @@ class QdrantHybridRetriever:
         """
         return self.retrieve_multi([query], preferred_doc_types)
 
+    def fetch_candidates(
+        self, query: str, preferred_doc_types: List[str] | None = None
+    ) -> Dict[Any, Dict[str, Any]]:
+        """Truy vấn RRF (dense+sparse) cho 1 câu hỏi, KHÔNG rerank — trả về dict {point_id: payload}
+        để gọi nơi khác gộp với candidate pool của (các) câu hỏi khác trước khi rerank 1 lần.
+        Tách riêng khỏi retrieve_multi() để nodes.py có thể gọi hàm này ở 2 thời điểm khác nhau
+        (VD: truy vấn câu hỏi gốc song song lúc router_node đang gọi LLM - speculative retrieval)."""
+        query_filter = self._build_filter(preferred_doc_types)
+        response = self._query(query, query_filter, self.candidate_k)
+
+        if preferred_doc_types and len(response.points) < max(2, self.candidate_k // 2):
+            response = self._query(query, self._build_filter(), self.candidate_k)
+
+        return {point.id: point.payload for point in response.points if point.payload}
+
+    def rerank_merged(
+        self, rerank_query: str, candidate_dicts: List[Dict[Any, Dict[str, Any]]]
+    ) -> List[Dict[str, Any]]:
+        """Gộp nhiều candidate pool (mỗi cái từ 1 lần gọi fetch_candidates, có thể ở thời điểm
+        khác nhau) theo point_id rồi rerank 1 lần bằng rerank_query."""
+        merged: Dict[Any, Dict[str, Any]] = {}
+        for candidates in candidate_dicts:
+            for point_id, payload in candidates.items():
+                merged.setdefault(point_id, payload)
+        return self._rerank(rerank_query, list(merged.values()))
+
     def retrieve_multi(
         self, queries: List[str], preferred_doc_types: List[str] | None = None
     ) -> List[Dict[str, Any]]:
@@ -111,22 +141,10 @@ class QdrantHybridRetriever:
         cả candidate pool (candidate_k) dù truy riêng câu hỏi gốc vẫn tìm thấy đúng ở hạng #1.
         Truy riêng từng biến thể rồi gộp giữ được tín hiệu mạnh của từng câu, tránh bị pha loãng."""
         try:
-            merged: Dict[Any, Dict[str, Any]] = {}
-            for query in queries:
-                query_filter = self._build_filter(preferred_doc_types)
-                response = self._query(query, query_filter, self.candidate_k)
-
-                if preferred_doc_types and len(response.points) < max(2, self.candidate_k // 2):
-                    response = self._query(query, self._build_filter(), self.candidate_k)
-
-                for point in response.points:
-                    if point.payload:
-                        merged.setdefault(point.id, point.payload)
-
+            candidate_dicts = [self.fetch_candidates(q, preferred_doc_types) for q in queries]
             # Rerank bằng biến thể câu hỏi cuối cùng (thường là bản đã diễn giải/chuẩn hoá
             # follow-up, đầy đủ ngữ cảnh nhất) để chấm điểm liên quan nhất quán.
-            rerank_query = queries[-1]
-            return self._rerank(rerank_query, list(merged.values()))
+            return self.rerank_merged(queries[-1], candidate_dicts)
         except Exception as e:
             print(f"Lỗi truy vấn Qdrant: {e}")
             return []
