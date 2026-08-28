@@ -13,7 +13,7 @@ def load_dataset():
         return json.load(f)
 
 
-def call_chat(question: str, timeout: int = 90) -> str:
+def call_chat(question: str, timeout: int = 150) -> str:
     body = json.dumps({"question": question}).encode("utf-8")
     req = urllib.request.Request(
         f"{BASE_URL}/chat", data=body, headers={"Content-Type": "application/json"}

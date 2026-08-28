@@ -12,8 +12,16 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from retriever.qdrant_retriever import QdrantHybridRetriever
 
 LLM_PROVIDER = "unknown"
-MAX_GRADE_CONTEXT_CHARS = 10000
-MAX_GENERATE_CONTEXT_CHARS = 10000
+# Với top_k=8 sau rerank, 1 chunk (đặc biệt chunk bảng) có thể dài tới MAX_CHUNK_CHARS=3500 ->
+# 8 chunk có thể cần tới ~28000 ký tự để không bị cắt. Ngân sách 10000 trước đây (khi chưa có
+# retrieve_multi) khiến thứ tự rerank quyết định chunk nào "lọt" vào context: đã xác minh thực
+# tế 1 chunk đúng (QCVN_41_2019 Điều 16 Bảng) qua được grade_node (do có chunk khác cũng liên
+# quan) nhưng bị cắt khỏi context của generate_node vì xếp hạng thấp hơn budget cho phép, khiến
+# generate_node báo "không tìm thấy thông tin" dù dữ liệu đúng đã có trong top_k. Nâng ngân sách
+# để giảm phụ thuộc thứ tự, chấp nhận đánh đổi độ trễ (đã có reranker/retrieve_multi lọc chunk
+# tốt hơn nên ít rủi ro tăng token lãng phí so với giai đoạn top_k lớn trước khi có reranker).
+MAX_GRADE_CONTEXT_CHARS = 16000
+MAX_GENERATE_CONTEXT_CHARS = 16000
 MAX_WEB_CONTEXT_CHARS = 6000
 MAX_CHUNK_CHARS = 3500
 
@@ -209,14 +217,15 @@ Câu hỏi viết lại:"""
         return question
 
 def retrieve_node(state):
-    """Truy xuất tài liệu từ Qdrant (Hybrid + RRF). Kết hợp câu hỏi gốc + bản diễn giải (đã chuẩn hóa
-    follow-up + thuật ngữ pháp lý) để tăng khả năng khớp cả theo nghĩa thông tục lẫn văn phong luật
-    chính thức."""
+    """Truy xuất tài liệu từ Qdrant (Hybrid + RRF). Truy riêng câu hỏi gốc + bản diễn giải (đã
+    chuẩn hóa follow-up + thuật ngữ pháp lý) rồi gộp candidate pool (retrieve_multi), THAY VÌ nối
+    chuỗi 2 câu thành 1 query dài — đã xác minh thực tế nối chuỗi có thể pha loãng dense embedding
+    khiến chunk đúng bị rớt khỏi candidate pool dù truy riêng câu hỏi gốc vẫn tìm thấy đúng."""
     question = state.get("question", "")
     chat_history = state.get("chat_history", [])
     expanded = expand_query(question, chat_history)
-    search_query = f"{question} {expanded}" if expanded.strip().lower() != question.strip().lower() else question
-    chunks = get_retriever().retrieve(search_query, preferred_doc_types_for_question(question))
+    queries = [question] if expanded.strip().lower() == question.strip().lower() else [question, expanded]
+    chunks = get_retriever().retrieve_multi(queries, preferred_doc_types_for_question(question))
     return {"chunks": chunks, "expanded_query": expanded}
 
 def effective_question(state) -> str:
@@ -224,6 +233,20 @@ def effective_question(state) -> str:
     grade/generate/web_search — tránh dùng thẳng câu hỏi thô (VD: "Còn xe máy thì sao?") vốn không
     có nghĩa nếu tách khỏi lịch sử hội thoại."""
     return state.get("expanded_query") or state.get("question", "")
+
+def _grade_once(prompt: str) -> bool:
+    if _structured_output_supported:
+        try:
+            structured_llm = get_structured_llm(GradeOutput)
+            result = structured_llm.invoke(prompt)  # thử 1 lần, không retry (lỗi không hỗ trợ là vĩnh viễn)
+            return result.is_relevant
+        except Exception as e:
+            _mark_structured_output_unsupported()
+            print(f"[WARN] Structured output thất bại ở grade_node, fallback sang parse string: {e}", flush=True)
+
+    res = invoke_with_retry(lambda: llm.invoke(prompt))
+    print(f"[DEBUG] grade_node raw response: {res.content!r}", flush=True)
+    return "yes" in res.content.lower()
 
 def grade_node(state):
     """Đánh giá xem tài liệu có liên quan và đủ để trả lời hay không."""
@@ -245,18 +268,17 @@ Tài liệu: {context}
 Trả lời (yes/no):"""
     debug_llm_prompt("grade_node", prompt)
 
-    if _structured_output_supported:
-        try:
-            structured_llm = get_structured_llm(GradeOutput)
-            result = structured_llm.invoke(prompt)  # thử 1 lần, không retry (lỗi không hỗ trợ là vĩnh viễn)
-            return {"is_relevant": result.is_relevant}
-        except Exception as e:
-            _mark_structured_output_unsupported()
-            print(f"[WARN] Structured output thất bại ở grade_node, fallback sang parse string: {e}", flush=True)
+    if _grade_once(prompt):
+        return {"is_relevant": True}
 
-    res = invoke_with_retry(lambda: llm.invoke(prompt))
-    print(f"[DEBUG] grade_node raw response: {res.content!r}", flush=True)
-    return {"is_relevant": "yes" in res.content.lower()}
+    # DeepSeek (và nhiều model MoE khác) không hoàn toàn deterministic dù temperature=0, nhất là
+    # ở câu hỏi biên (borderline): đã xác minh thực tế cùng 1 context ~16000 ký tự (không đổi
+    # giữa các lần gọi) nhưng verdict đổi qua lại yes/no giữa 5 lần gọi liên tiếp. Gọi lại 1 lần
+    # nếu lần đầu "no" (self-consistency 2 lượt, thiên về "yes" nếu 1 trong 2 lượt đồng ý) để
+    # giảm rủi ro rơi oan vào HITL/web_search chỉ vì 1 lần LLM đoán sai, đổi lại thêm ~1 lượt gọi
+    # LLM CHỈ trên nhánh "no" (không ảnh hưởng latency của các câu trả lời ngay từ lần đầu).
+    print("[DEBUG] grade_node lần 1 = no, gọi lại lần 2 (self-consistency)...", flush=True)
+    return {"is_relevant": _grade_once(prompt)}
 
 def web_search_node(state):
     """Sử dụng Tavily để tìm kiếm ngoài khi tài liệu Qdrant không đủ."""

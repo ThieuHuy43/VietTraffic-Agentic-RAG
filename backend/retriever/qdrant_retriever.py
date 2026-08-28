@@ -98,20 +98,35 @@ class QdrantHybridRetriever:
         - Rerank bằng cross-encoder rồi cắt xuống top_k cuối cùng.
         - Lọc bỏ các chunk từ các văn bản đã bị bãi bỏ (status="repealed").
         """
+        return self.retrieve_multi([query], preferred_doc_types)
+
+    def retrieve_multi(
+        self, queries: List[str], preferred_doc_types: List[str] | None = None
+    ) -> List[Dict[str, Any]]:
+        """Truy vấn với NHIỀU biến thể câu hỏi (VD: câu hỏi gốc + bản diễn giải thuật ngữ pháp
+        lý) rồi GỘP candidate pool, thay vì nối chuỗi các câu hỏi thành 1 query dài duy nhất.
+
+        Đã xác minh thực tế: nối chuỗi câu hỏi gốc (ngắn, khớp tốt) với bản diễn giải dài hơn
+        (do expand_query sinh ra) có thể pha loãng dense embedding, khiến chunk đúng bị rớt khỏi
+        cả candidate pool (candidate_k) dù truy riêng câu hỏi gốc vẫn tìm thấy đúng ở hạng #1.
+        Truy riêng từng biến thể rồi gộp giữ được tín hiệu mạnh của từng câu, tránh bị pha loãng."""
         try:
-            query_filter = self._build_filter(preferred_doc_types)
-            response = self._query(query, query_filter, self.candidate_k)
+            merged: Dict[Any, Dict[str, Any]] = {}
+            for query in queries:
+                query_filter = self._build_filter(preferred_doc_types)
+                response = self._query(query, query_filter, self.candidate_k)
 
-            if preferred_doc_types and len(response.points) < max(2, self.candidate_k // 2):
-                response = self._query(query, self._build_filter(), self.candidate_k)
+                if preferred_doc_types and len(response.points) < max(2, self.candidate_k // 2):
+                    response = self._query(query, self._build_filter(), self.candidate_k)
 
-            # Trích xuất payload từ points trả về
-            candidates = []
-            for point in response.points:
-                if point.payload:
-                    candidates.append(point.payload)
+                for point in response.points:
+                    if point.payload:
+                        merged.setdefault(point.id, point.payload)
 
-            return self._rerank(query, candidates)
+            # Rerank bằng biến thể câu hỏi cuối cùng (thường là bản đã diễn giải/chuẩn hoá
+            # follow-up, đầy đủ ngữ cảnh nhất) để chấm điểm liên quan nhất quán.
+            rerank_query = queries[-1]
+            return self._rerank(rerank_query, list(merged.values()))
         except Exception as e:
             print(f"Lỗi truy vấn Qdrant: {e}")
             return []
