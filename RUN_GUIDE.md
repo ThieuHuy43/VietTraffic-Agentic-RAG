@@ -10,6 +10,12 @@ Trước khi chạy bất kỳ lệnh nào, hãy đảm bảo bạn đã điền
 GEMINI_API_KEY=your_key
 DEEPSEEK_API_KEY=your_key
 TAVILY_API_KEY=your_key
+
+# Tùy chọn: bật LangSmith tracing để xem trace latency/token từng bước của agent
+# tại https://smith.langchain.com/ (lấy API key ở Settings -> API Keys)
+LANGCHAIN_TRACING_V2=false
+LANGCHAIN_API_KEY=your_langsmith_key
+LANGCHAIN_PROJECT=viet-traffic-rag
 ```
 
 ---
