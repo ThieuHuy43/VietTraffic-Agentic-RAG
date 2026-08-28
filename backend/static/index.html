@@ -388,6 +388,8 @@
             addMessage('user', q);
             const botMsgId = 'bot-' + Date.now();
             const botDiv = showTyping(botMsgId);
+            let streamBuffer = '';
+            let streamStarted = false;
 
             try {
                 const response = await fetch('/chat', {
@@ -408,7 +410,18 @@
                         if (line.startsWith('data: ')) {
                             try {
                                 const data = JSON.parse(line.replace('data: ', ''));
-                                if (data.status === 'step') {
+                                if (data.status === 'token') {
+                                    // Token thật từ generate_node (llm.stream()) - hiện chữ xuất hiện
+                                    // dần ngay khi sinh ra, thay vì đợi "done" mới thấy cả câu trả lời.
+                                    if (!streamStarted) {
+                                        streamStarted = true;
+                                        botDiv.innerHTML = '<span class="stream-text"></span>';
+                                    }
+                                    streamBuffer += data.content;
+                                    const streamEl = botDiv.querySelector('.stream-text');
+                                    if (streamEl) streamEl.textContent = streamBuffer;
+                                    scrollToBottom();
+                                } else if (data.status === 'step') {
                                     updateThinkingStep(botDiv, data.message);
                                 } else if (data.status === 'done') {
                                     botDiv.innerHTML = formatMarkdown(data.answer);

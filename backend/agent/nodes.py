@@ -1,3 +1,4 @@
+import concurrent.futures
 import os
 import re
 import sys
@@ -71,12 +72,27 @@ def preferred_doc_types_for_question(question: str):
         return ["luat"]
     return None
 
-def invoke_with_retry(fn, retries: int = 2, base_delay: float = 1.0):
-    """Gọi fn() (LLM invoke, tool call...) với retry + backoff cho lỗi thoáng qua (rate limit, network)."""
+_llm_executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+
+def invoke_with_retry(fn, retries: int = 2, base_delay: float = 1.0, timeout: float = 25.0):
+    """Gọi fn() (LLM invoke, tool call...) với retry + backoff cho lỗi thoáng qua (rate limit,
+    network), VÀ với timeout cứng cho mỗi lần thử.
+
+    Đã đo thực tế: DeepSeek đôi khi mất >100s cho MỘT lượt gọi đơn lẻ mà KHÔNG ném exception (chỉ
+    đơn thuần rất chậm) — trước đây trường hợp này không được retry vì fn() vẫn "thành công", chỉ
+    là chậm. Chạy fn() trong thread riêng (qua _llm_executor) và giới hạn thời gian chờ bằng
+    future.result(timeout=...); hết giờ thì coi như thất bại và thử lại — thread cũ vẫn chạy ngầm
+    tới khi xong rồi tự bỏ kết quả, không ảnh hưởng tới request hiện tại. Biến 1 lần "ăn may" rất
+    chậm, không giới hạn trên, thành tối đa (retries+1) x timeout giây."""
     last_exc = None
     for attempt in range(retries + 1):
+        future = _llm_executor.submit(fn)
         try:
-            return fn()
+            return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError as e:
+            last_exc = e
+            if attempt < retries:
+                print(f"[WARN] Lời gọi vượt quá {timeout}s (lần {attempt + 1}/{retries + 1}), thử lại...", flush=True)
         except Exception as e:
             last_exc = e
             if attempt < retries:
@@ -100,6 +116,7 @@ def is_greeting(question: str) -> bool:
 
 class RouterOutput(BaseModel):
     intent: Literal["hoi_luat", "chao_hoi"]
+    expanded_query: str
 
 class GradeOutput(BaseModel):
     is_relevant: bool
@@ -149,37 +166,6 @@ elif os.getenv("GEMINI_API_KEY"):
 else:
     raise ValueError("Vui lòng cung cấp ít nhất một API Key: DEEPSEEK_API_KEY hoặc GEMINI_API_KEY")
 
-def router_node(state):
-    """Phân loại intent của câu hỏi."""
-    question = state.get("question", "")
-
-    # Fast-path: lời chào ngắn, rõ ràng thì bỏ qua lượt gọi LLM.
-    if is_greeting(question):
-        return {"intent": "chao_hoi"}
-
-    prompt = f"""Phân loại câu hỏi của người dùng vào 1 trong 2 loại: 'hoi_luat', 'chao_hoi'.
-Câu hỏi: {question}
-Trả lời chỉ 1 từ duy nhất:"""
-    debug_llm_prompt("router_node", prompt)
-
-    if _structured_output_supported:
-        try:
-            structured_llm = get_structured_llm(RouterOutput)
-            result = structured_llm.invoke(prompt)  # thử 1 lần, không retry (lỗi không hỗ trợ là vĩnh viễn)
-            return {"intent": result.intent}
-        except Exception as e:
-            _mark_structured_output_unsupported()
-            print(f"[WARN] Structured output thất bại ở router_node, fallback sang parse string: {e}", flush=True)
-
-    res = invoke_with_retry(lambda: llm.invoke(prompt))
-    intent = res.content.strip().lower()
-    if 'chao_hoi' in intent:
-        return {"intent": "chao_hoi"}
-    return {"intent": "hoi_luat"}
-
-def greeting_node(state):
-    return {"final_answer": "Chào bạn, tôi là Trợ lý Pháp luật Giao thông Việt Nam. Tôi có thể giúp gì cho bạn?"}
-
 def format_chat_history(chat_history: list, max_turns: int = 3) -> str:
     if not chat_history:
         return ""
@@ -188,45 +174,68 @@ def format_chat_history(chat_history: list, max_turns: int = 3) -> str:
         turns.append(f"Người dùng: {turn.get('question', '')}\nTrợ lý: {turn.get('answer', '')}")
     return "Lịch sử hội thoại gần đây:\n" + "\n\n".join(turns) + "\n\n"
 
-def expand_query(question: str, chat_history: list) -> str:
-    """Diễn giải câu hỏi thông tục sang thuật ngữ pháp lý giao thông chính thức, vì văn bản luật
-    thường dùng cách hành văn trang trọng khác hẳn cách người dùng hỏi (VD: "vượt đèn đỏ" -> "không
-    chấp hành hiệu lệnh của đèn tín hiệu giao thông"), khiến cả dense lẫn sparse retrieval dễ bỏ sót
-    đúng điều khoản nếu chỉ search bằng nguyên văn câu hỏi thông tục.
+def router_node(state):
+    """Phân loại intent CÙNG LÚC với diễn giải câu hỏi (chuẩn hoá follow-up + thuật ngữ pháp lý)
+    trong 1 lượt gọi LLM duy nhất — trước đây đây là 2 lượt riêng (router_node cũ chỉ phân loại,
+    rồi expand_query() gọi lại bên trong retrieve_node). Gộp lại giảm 1/4 số lượt gọi LLM tuần
+    tự mỗi request, đồng thời giảm 1 điểm rủi ro "trúng" đúng lúc DeepSeek bị chậm bất thường
+    (đã đo thực tế 1 lượt gọi đơn lẻ có thể mất 125s+ dù không có lỗi)."""
+    question = state.get("question", "")
+    chat_history = state.get("chat_history", [])
 
-    Đồng thời dùng chat_history (nếu có) để viết lại câu hỏi follow-up ("còn xe máy thì sao?") thành
-    câu hỏi độc lập, đầy đủ ngữ cảnh — tái dùng đúng 1 lượt gọi LLM này, không thêm round-trip riêng
-    cho việc "nhớ" hội thoại, để tránh phình thêm latency."""
+    # Fast-path: lời chào ngắn, rõ ràng thì bỏ qua lượt gọi LLM.
+    if is_greeting(question):
+        return {"intent": "chao_hoi", "expanded_query": question}
+
     history_str = format_chat_history(chat_history)
-    prompt = f"""{history_str}Dựa vào lịch sử hội thoại ở trên (nếu có) để hiểu ngữ cảnh, hãy viết lại
-Câu hỏi mới nhất của người dùng thành MỘT câu hỏi độc lập, đầy đủ ý nghĩa (không cần đọc lịch sử vẫn
-hiểu được), đồng thời diễn giải sang thuật ngữ pháp lý giao thông đường bộ Việt Nam chính thức, đúng
-cách hành văn thường dùng trong luật/nghị định (ví dụ: "vượt đèn đỏ" -> "không chấp hành hiệu lệnh của
-đèn tín hiệu giao thông"; "kẹp 3" -> "chở quá số người quy định").
-Nếu Câu hỏi mới nhất đã độc lập, không phụ thuộc lịch sử, chỉ cần diễn giải thuật ngữ như bình thường.
-Chỉ trả về DUY NHẤT câu hỏi đã viết lại, không thêm giải thích hay tiền tố nào khác.
+    prompt = f"""{history_str}Phân loại câu hỏi mới nhất của người dùng vào 1 trong 2 loại:
+'hoi_luat' (hỏi về luật giao thông) hoặc 'chao_hoi' (chào hỏi/giao tiếp thông thường).
+
+Đồng thời, nếu là 'hoi_luat': dựa vào lịch sử hội thoại ở trên (nếu có) để hiểu ngữ cảnh, viết lại
+câu hỏi thành MỘT câu hỏi độc lập, đầy đủ ý nghĩa (không cần đọc lịch sử vẫn hiểu được), đồng thời
+diễn giải sang thuật ngữ pháp lý giao thông đường bộ Việt Nam chính thức, đúng cách hành văn thường
+dùng trong luật/nghị định (ví dụ: "vượt đèn đỏ" -> "không chấp hành hiệu lệnh của đèn tín hiệu giao
+thông"; "kẹp 3" -> "chở quá số người quy định"). Nếu câu hỏi đã độc lập, chỉ cần diễn giải thuật
+ngữ như bình thường. Nếu là 'chao_hoi', giữ nguyên câu hỏi gốc cho trường QUERY.
+
 Câu hỏi mới nhất: {question}
-Câu hỏi viết lại:"""
-    debug_llm_prompt("expand_query", prompt)
-    try:
-        res = invoke_with_retry(lambda: llm.invoke(prompt))
-        expanded = res.content.strip()
-        return expanded if expanded else question
-    except Exception as e:
-        print(f"[WARN] expand_query thất bại, dùng nguyên câu hỏi gốc: {e}", flush=True)
-        return question
+
+Trả lời ĐÚNG theo định dạng sau, không thêm giải thích:
+INTENT: <hoi_luat hoặc chao_hoi>
+QUERY: <câu hỏi đã viết lại>"""
+    debug_llm_prompt("router_node", prompt)
+
+    if _structured_output_supported:
+        try:
+            structured_llm = get_structured_llm(RouterOutput)
+            result = structured_llm.invoke(prompt)  # thử 1 lần, không retry (lỗi không hỗ trợ là vĩnh viễn)
+            return {"intent": result.intent, "expanded_query": result.expanded_query or question}
+        except Exception as e:
+            _mark_structured_output_unsupported()
+            print(f"[WARN] Structured output thất bại ở router_node, fallback sang parse string: {e}", flush=True)
+
+    res = invoke_with_retry(lambda: llm.invoke(prompt))
+    content = res.content.strip()
+    intent_match = re.search(r"INTENT:\s*(\w+)", content, re.IGNORECASE)
+    query_match = re.search(r"QUERY:\s*(.+)", content, re.IGNORECASE | re.DOTALL)
+    intent = "chao_hoi" if intent_match and "chao_hoi" in intent_match.group(1).lower() else "hoi_luat"
+    expanded_query = query_match.group(1).strip() if query_match else question
+    return {"intent": intent, "expanded_query": expanded_query or question}
+
+def greeting_node(state):
+    return {"final_answer": "Chào bạn, tôi là Trợ lý Pháp luật Giao thông Việt Nam. Tôi có thể giúp gì cho bạn?"}
 
 def retrieve_node(state):
     """Truy xuất tài liệu từ Qdrant (Hybrid + RRF). Truy riêng câu hỏi gốc + bản diễn giải (đã
-    chuẩn hóa follow-up + thuật ngữ pháp lý) rồi gộp candidate pool (retrieve_multi), THAY VÌ nối
-    chuỗi 2 câu thành 1 query dài — đã xác minh thực tế nối chuỗi có thể pha loãng dense embedding
-    khiến chunk đúng bị rớt khỏi candidate pool dù truy riêng câu hỏi gốc vẫn tìm thấy đúng."""
+    chuẩn hóa follow-up + thuật ngữ pháp lý, do router_node sinh ra) rồi gộp candidate pool
+    (retrieve_multi), THAY VÌ nối chuỗi 2 câu thành 1 query dài — đã xác minh thực tế nối chuỗi
+    có thể pha loãng dense embedding khiến chunk đúng bị rớt khỏi candidate pool dù truy riêng
+    câu hỏi gốc vẫn tìm thấy đúng."""
     question = state.get("question", "")
-    chat_history = state.get("chat_history", [])
-    expanded = expand_query(question, chat_history)
+    expanded = state.get("expanded_query") or question
     queries = [question] if expanded.strip().lower() == question.strip().lower() else [question, expanded]
     chunks = get_retriever().retrieve_multi(queries, preferred_doc_types_for_question(question))
-    return {"chunks": chunks, "expanded_query": expanded}
+    return {"chunks": chunks}
 
 def effective_question(state) -> str:
     """Câu hỏi độc lập, đã chuẩn hóa (resolve follow-up + thuật ngữ pháp lý) để dùng cho các bước
@@ -450,6 +459,14 @@ Câu hỏi: {effective_question(state)}
 """
     debug_llm_prompt("generate_node", prompt)
 
-    res = invoke_with_retry(lambda: llm.invoke(prompt))
-    answer = res.content
+    # Dùng llm.stream() (thay vì .invoke()) để LangGraph có thể phát từng token qua
+    # stream_mode="messages" ở tầng graph.stream() trong main.py, cho phép FastAPI forward token
+    # thật ra SSE ngay khi sinh ra thay vì đợi toàn bộ câu trả lời xong mới trả về. Không bọc
+    # invoke_with_retry (retry giữa chừng 1 stream đã gửi 1 phần token ra client là vô nghĩa);
+    # nếu stream lỗi ngay từ đầu (trước khi có token nào), fallback về gọi invoke thường.
+    try:
+        answer = "".join(chunk.content for chunk in llm.stream(prompt))
+    except Exception as e:
+        print(f"[WARN] generate_node streaming thất bại, fallback sang invoke thường: {e}", flush=True)
+        answer = invoke_with_retry(lambda: llm.invoke(prompt)).content
     return {"final_answer": answer, "chat_history": append_chat_history(state, answer)}

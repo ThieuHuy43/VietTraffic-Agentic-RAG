@@ -54,13 +54,25 @@ def chat_endpoint(req: ChatRequest):
     Thực thi LangGraph và stream SSE. Nếu bị ngắt bởi HITL, trả về status="pending".
     Mỗi khi một node trong graph hoàn tất, gửi thêm event status="step" kèm mô tả bước đó
     để frontend hiện tiến trình xử lý thật (thinking) cho người dùng.
+    Riêng generate_node dùng llm.stream() (xem nodes.py) nên LangGraph phát được token thật qua
+    stream_mode="messages" — forward trực tiếp thành event status="token" để frontend hiện chữ
+    xuất hiện dần thay vì đợi cả câu trả lời xong (không giảm tổng thời gian xử lý, nhưng cải
+    thiện rõ cảm nhận tốc độ vì DeepSeek generate_node hay mất 10-30s+ cho câu trả lời dài).
     """
     thread_id = req.thread_id or str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
 
     def event_generator():
         try:
-            for event in agent_app.stream({"question": req.question}, config=config):
+            for stream_type, event in agent_app.stream(
+                {"question": req.question}, config=config, stream_mode=["updates", "messages"]
+            ):
+                if stream_type == "messages":
+                    chunk, metadata = event
+                    if metadata.get("langgraph_node") == "generate_node" and chunk.content:
+                        yield f"data: {json.dumps({'status': 'token', 'content': chunk.content, 'thread_id': thread_id}, ensure_ascii=False)}\n\n"
+                    continue
+
                 state = agent_app.get_state(config)
                 # Kiểm tra nếu đồ thị đang bị đóng băng tại process_hitl_node
                 if state.next and "process_hitl_node" in state.next:
