@@ -288,6 +288,82 @@
             font-size: 0.9rem;
             transition: opacity 0.2s ease;
         }
+
+        /* Câu hỏi gợi ý (FAQ chips) */
+        .suggestions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 14px;
+        }
+
+        .suggestion-chip {
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--glass-border);
+            color: var(--text-main);
+            border-radius: 14px;
+            padding: 9px 14px;
+            font-size: 0.85rem;
+            font-family: inherit;
+            cursor: pointer;
+            text-align: left;
+            transition: background 0.2s, border-color 0.2s, transform 0.15s;
+            width: auto;
+            height: auto;
+        }
+
+        .suggestion-chip:hover {
+            background: rgba(139, 92, 246, 0.15);
+            border-color: rgba(139, 92, 246, 0.4);
+            transform: translateY(-1px);
+        }
+
+        /* Nút copy trên tin nhắn bot */
+        .msg-actions {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 8px;
+        }
+
+        .copy-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: color 0.2s, background 0.2s;
+        }
+
+        .copy-btn:hover {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.08);
+            transform: none;
+            box-shadow: none;
+        }
+
+        .copy-btn svg {
+            width: 15px;
+            height: 15px;
+            margin: 0;
+        }
+
+        /* Input khóa khi đang xử lý */
+        input:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+            box-shadow: none !important;
+        }
     </style>
 </head>
 
@@ -311,6 +387,12 @@
             <p>Xin chào! Tôi là Trợ lý Pháp luật Giao thông Đường bộ Việt Nam.</p>
             <p>Tôi có thể giúp bạn giải đáp thắc mắc về <strong>Luật</strong>, <strong>Nghị định xử phạt</strong> và các
                 <strong>Quy chuẩn biển báo</strong> mới nhất.</p>
+            <div class="suggestions" id="suggestions">
+                <button class="suggestion-chip" type="button">Không đội mũ bảo hiểm khi đi xe máy bị phạt bao nhiêu tiền?</button>
+                <button class="suggestion-chip" type="button">Vượt đèn đỏ đối với ô tô bị phạt bao nhiêu tiền?</button>
+                <button class="suggestion-chip" type="button">Chở quá số người quy định trên xe máy bị phạt thế nào?</button>
+                <button class="suggestion-chip" type="button">Đường kính ngoài của biển báo cấm hình tròn là bao nhiêu cm?</button>
+            </div>
         </div>
     </div>
 
@@ -318,7 +400,7 @@
         <div class="input-box">
             <input type="text" id="prompt" placeholder="Nhập câu hỏi của bạn (VD: Mức phạt của ô tô khi vượt đèn đỏ?)"
                 onkeypress="if(event.key === 'Enter') send()" autocomplete="off">
-            <button onclick="send()" aria-label="Gửi">
+            <button id="sendBtn" onclick="send()" aria-label="Gửi">
                 <svg viewBox="0 0 24 24">
                     <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path>
                 </svg>
@@ -379,12 +461,48 @@
             return parsed;
         }
 
-        async function send() {
+        const COPY_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
+        const CHECK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+
+        // Thêm nút copy vào tin nhắn bot đã có câu trả lời cuối cùng (không thêm khi đang typing/stream).
+        function addCopyButton(botDiv, rawText) {
+            const actions = document.createElement('div');
+            actions.className = 'msg-actions';
+            const btn = document.createElement('button');
+            btn.className = 'copy-btn';
+            btn.type = 'button';
+            btn.setAttribute('aria-label', 'Sao chép câu trả lời');
+            btn.innerHTML = COPY_ICON;
+            btn.onclick = async () => {
+                try {
+                    await navigator.clipboard.writeText(rawText);
+                    btn.innerHTML = CHECK_ICON;
+                    setTimeout(() => { btn.innerHTML = COPY_ICON; }, 1500);
+                } catch (e) { }
+            };
+            actions.appendChild(btn);
+            botDiv.appendChild(actions);
+        }
+
+        function setInputEnabled(enabled) {
             const inp = document.getElementById('prompt');
-            const q = inp.value.trim();
+            const btn = document.getElementById('sendBtn');
+            inp.disabled = !enabled;
+            btn.disabled = !enabled;
+            if (enabled) inp.focus();
+        }
+
+        async function send(presetQuestion) {
+            const inp = document.getElementById('prompt');
+            const q = (presetQuestion !== undefined ? presetQuestion : inp.value).trim();
             if (!q) return;
             inp.value = '';
 
+            // Ẩn câu hỏi gợi ý sau khi bắt đầu hội thoại thật, tránh rối giao diện.
+            const suggestions = document.getElementById('suggestions');
+            if (suggestions) suggestions.remove();
+
+            setInputEnabled(false);
             addMessage('user', q);
             const botMsgId = 'bot-' + Date.now();
             const botDiv = showTyping(botMsgId);
@@ -425,6 +543,8 @@
                                     updateThinkingStep(botDiv, data.message);
                                 } else if (data.status === 'done') {
                                     botDiv.innerHTML = formatMarkdown(data.answer);
+                                    addCopyButton(botDiv, data.answer);
+                                    setInputEnabled(true);
                                     scrollToBottom();
                                 } else if (data.status === 'pending') {
                                     botDiv.innerHTML = `
@@ -436,6 +556,7 @@
                                     scrollToBottom();
                                 } else if (data.status === 'error') {
                                     botDiv.innerHTML = `<span style="color:#ef4444">❌ Lỗi: ${data.message}</span>`;
+                                    setInputEnabled(true);
                                 }
                             } catch (e) { }
                         }
@@ -443,6 +564,7 @@
                 }
             } catch (e) {
                 botDiv.innerHTML = `<span style="color:#ef4444">Lỗi kết nối: ${e}</span>`;
+                setInputEnabled(true);
             }
         }
 
@@ -457,7 +579,9 @@
                         botDiv.style.opacity = '0';
                         setTimeout(() => {
                             botDiv.innerHTML = formatMarkdown(data.answer);
+                            addCopyButton(botDiv, data.answer);
                             botDiv.style.opacity = '1';
+                            setInputEnabled(true);
                             scrollToBottom();
                         }, 200);
                         clearInterval(pollingInterval);
@@ -465,6 +589,11 @@
                 } catch (e) { }
             }, 3000);
         }
+
+        // Câu hỏi gợi ý: click là điền + gửi luôn (không cần gõ lại).
+        document.querySelectorAll('.suggestion-chip').forEach(chip => {
+            chip.addEventListener('click', () => send(chip.textContent));
+        });
     </script>
 </body>
 
