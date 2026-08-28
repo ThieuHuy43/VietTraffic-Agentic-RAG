@@ -88,8 +88,11 @@ class LegalStateTracker:
             return text
         return " ".join(context_parts + [text])
 
-    def _append_chunk(self, text: str, part_index: int, total_parts: int):
+    def _append_chunk(self, text: str, part_index: int, total_parts: int, is_table: bool = False):
         text_with_context = self._add_parent_context(text)
+        citation = self._build_citation()
+        if is_table:
+            citation += " (Bảng)"
         self.chunks.append({
             "doc_id": self.doc_id,
             "doc_type": self.doc_type,
@@ -105,9 +108,25 @@ class LegalStateTracker:
             "supersedes": self.supersedes,
             "chunk_part": part_index,
             "chunk_total_parts": total_parts,
-            "citation": self._build_citation(),
+            "citation": citation,
+            "chunk_type": "table" if is_table else "text",
         })
-        
+
+    def add_table_chunk(self, table_text: str):
+        """Thêm 1 bảng (đã được chuyển sang text có cấu trúc "Header: value") thành chunk riêng,
+        kế thừa ngữ cảnh Chương/Điều/Khoản hiện tại của tracker. Dùng cho các văn bản có bảng
+        dữ liệu kỹ thuật (VD: QCVN 41 - bảng kích thước, màu sắc biển báo) mà nếu để lẫn vào
+        luồng text thường sẽ bị extract_text() làm rối thứ tự cột/hàng."""
+        if not table_text or not table_text.strip():
+            return
+        # Đóng đoạn text thường đang dở trước khi chèn chunk bảng, để không lẫn 2 loại nội dung.
+        self.flush()
+        text = f"Bảng dữ liệu: {table_text}"
+        parts = self._split_long_text(text)
+        total_parts = len(parts)
+        for index, part in enumerate(parts, start=1):
+            self._append_chunk(part, index, total_parts, is_table=True)
+
     def flush(self):
         """Gộp text hiện hành và tạo chunk, sau đó clear text."""
         if self.current_text:

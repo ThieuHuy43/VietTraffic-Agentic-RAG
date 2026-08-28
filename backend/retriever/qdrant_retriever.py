@@ -7,7 +7,7 @@ import sys
 
 # Thêm đường dẫn để import custom sparse vector utils
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from utils.sparse_vector import create_sparse_vector
+from utils.sparse_vector import create_sparse_query_vector
 
 load_dotenv()
 
@@ -56,7 +56,7 @@ class QdrantHybridRetriever:
 
     def _query(self, query: str, query_filter: models.Filter, limit: int):
         dense_vec = self.dense_model.encode(f"query: {query}").tolist()
-        sparse_vec = create_sparse_vector(query)
+        sparse_vec = create_sparse_query_vector(query)
 
         return self.client.query_points(
             collection_name=COLLECTION_NAME,
